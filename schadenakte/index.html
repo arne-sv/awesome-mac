@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SchadenAkte Prototyp</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--panel:#fff;--ink:#1d2330;--muted:#6b7385;--line:#e2e5eb;--accent:#1f5fbf;--warn:#b5651d;--bad:#b3261e;--ok:#2e7d32}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171d;--panel:#1c2028;--ink:#e6e8ec;--muted:#9aa3b5;--line:#2c323d;--accent:#6ea2ff;--warn:#e0a060;--bad:#ff7b72;--ok:#7bc77f}}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;gap:12px;align-items:center;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:16px;margin:0 12px 0 0}
+nav button,.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 10px;border-radius:6px;cursor:pointer;font:inherit}
+nav button.active,.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.badge{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:var(--bad);color:#fff;font-size:11px;text-align:center;margin-left:4px}
+main{padding:16px;max-width:1200px;margin:auto}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12px}
+tr.click{cursor:pointer}tr.click:hover{background:color-mix(in srgb,var(--accent) 8%,transparent)}
+input,select,textarea{width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+textarea{min-height:70px}
+label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.muted{color:var(--muted)}.warn{color:var(--warn)}.bad{color:var(--bad)}.ok{color:var(--ok)}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px}
+.step{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)}
+.step.done span{text-decoration:line-through;color:var(--muted)}
+.pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--line);color:var(--muted)}
+h2{font-size:15px;margin:0 0 10px}h3{font-size:13px;margin:12px 0 6px}
+.task{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);align-items:flex-start}
+.task .prio{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:none}
+@media (max-width:640px){main{padding:10px 16px}th:nth-child(n+4),td:nth-child(n+4){display:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>SchadenAkte</h1>
+  <nav class="row" id="nav"></nav>
+  <span style="flex:1"></span>
+  <button class="btn" onclick="resetDemo()">Demo zurücksetzen</button>
+</header>
+<main id="app"></main>
+
+<script>
+/* ============================================================
+   Prototyp: Schadenbearbeitung für Sachverständige
+   - Daten liegen nur im Browser (localStorage). Kein Backend.
+   - Ziel: Abläufe und Assistenzlogik greifbar machen, nicht Produktion.
+   ============================================================ */
+
+const TODAY = () => new Date().toISOString().slice(0,10);
+const addDays = (d,n) => { const x=new Date(d); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); };
+const daysBetween = (a,b) => Math.round((new Date(b)-new Date(a))/864e5);
+const uid = () => Math.random().toString(36).slice(2,9);
+const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const eur = n => (Number(n)||0).toLocaleString('de-DE',{style:'currency',currency:'EUR'});
+
+/* ---------- Sparten-Workflows (Vorlagen) ----------
+   Jeder Schritt: Titel, Frist in Tagen ab Auftragseingang, optional Auslöser.
+   Eine Akte kopiert die Vorlage und kann sie danach frei ändern. */
+const SPARTEN = {
+  'Leitungswasser': [
+    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Kontakt VN aufnehmen',d:1},
+    {t:'Ortstermin vereinbaren',d:2,kind:'termin'},{t:'Ortstermin durchführen',d:5},
+    {t:'Leckageortung / Trocknung prüfen',d:7},{t:'Sanierungsangebot prüfen',d:10,kind:'pruefung'},
+    {t:'Gutachten erstellen',d:14,kind:'gutachten'},{t:'Rechnung prüfen',d:30,kind:'pruefung'},
+    {t:'Honorar abrechnen',d:31},{t:'Akte schließen',d:35}],
+  'Sturm/Hagel': [
+    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Wetterdaten abrufen (DWD)',d:1},
+    {t:'Ortstermin vereinbaren',d:2,kind:'termin'},{t:'Ortstermin durchführen',d:5},
+    {t:'Dachdeckerangebot prüfen',d:8,kind:'pruefung'},{t:'Gutachten erstellen',d:12,kind:'gutachten'},
+    {t:'Honorar abrechnen',d:14},{t:'Akte schließen',d:20}],
+  'Feuer': [
+    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Sofortkontakt VN',d:0},
+    {t:'Ortstermin vereinbaren',d:1,kind:'termin'},{t:'Ortstermin durchführen',d:2},
+    {t:'Ermittlungsakte anfordern',d:3},{t:'Sanierungsangebote prüfen',d:14,kind:'pruefung'},
+    {t:'Zwischenbericht an VR',d:10},{t:'Gutachten erstellen',d:21,kind:'gutachten'},
+    {t:'Rechnungen prüfen',d:45,kind:'pruefung'},{t:'Honorar abrechnen',d:46},{t:'Akte schließen',d:50}],
+  'Kfz': [
+    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Besichtigungstermin vereinbaren',d:1,kind:'termin'},
+    {t:'Fahrzeugbesichtigung',d:3},{t:'Kalkulation erstellen',d:4},
+    {t:'Gutachten erstellen',d:5,kind:'gutachten'},{t:'Honorar abrechnen',d:6},{t:'Akte schließen',d:10}],
+};
+
+/* ---------- Gutachten-Maske: strukturierte Felder ----------
+   Alle Felder liegen in der Akte und sind auswertbar (Statistik, Suche, PDF). */
+const GUTACHTEN_FELDER = [
+  ['schadentag','Schadentag','date'],['ursache','Schadenursache','select',['Leitungswasser','Sturm','Hagel','Feuer','Elementar','Einbruch','Unfall','Sonstige']],
+  ['ursache_detail','Ursache im Detail','textarea'],['befund','Befund Ortstermin','textarea'],
+  ['betroffene_raeume','Betroffene Räume / Bauteile','textarea'],['flaeche_m2','Betroffene Fläche (m²)','number'],
+  ['deckung','Deckung gegeben?','select',['ja','nein','teilweise','offen']],['vorschaden','Vorschäden','textarea'],
+  ['massnahmen','Empfohlene Maßnahmen','textarea'],['schadenhoehe_netto','Ermittelte Schadenhöhe netto (€)','number'],
+  ['zeitwert_abzug','Abzug neu für alt (€)','number'],['regress','Regressmöglichkeit','select',['keine','prüfen','ja']],
+  ['fazit','Fazit','textarea'],
+];
+
+/* ---------- Demo-Daten ---------- */
+function demo(){
+  const t=TODAY();
+  const mk=(o)=>({id:uid(),notizen:[],emails:[],termine:[],pruefungen:[],gutachten:{},erledigteAufgaben:[],status:'offen',...o,
+    workflow:SPARTEN[o.sparte].map(s=>({...s,id:uid(),done:false,faellig:addDays(o.eingang,s.d)}))});
+  const a1=mk({az:'SV-2026-0141',schadennr:'LW-883421',sparte:'Leitungswasser',auftraggeber:'Musterversicherung AG',sachbearbeiter:'Fr. Klein',
+    vn:'Familie Becker',tel:'0221 555 1234',mail:'becker@example.de',ort:'Venloer Str. 12, 50672 Köln',lat:50.943,lon:6.937,eingang:addDays(t,-6),
+    beschreibung:'Wasseraustritt Küche EG, Feuchtigkeit in Wand zum Bad.'});
+  a1.workflow[0].done=a1.workflow[1].done=true;
+  const a2=mk({az:'SV-2026-0142',schadennr:'ST-11902',sparte:'Sturm/Hagel',auftraggeber:'Beispiel Versicherung',sachbearbeiter:'Hr. Wolf',
+    vn:'Hr. Yilmaz',tel:'0211 444 222',mail:'yilmaz@example.de',ort:'Kölner Str. 80, 40211 Düsseldorf',lat:51.222,lon:6.794,eingang:addDays(t,-2),
+    beschreibung:'Dachziegel abgedeckt, Wassereintritt Dachgeschoss.'});
+  a2.workflow[0].done=true;
+  a2.termine.push({id:uid(),datum:t,zeit:'14:00',art:'Ortstermin',ort:a2.ort,lat:a2.lat,lon:a2.lon});
+  const a3=mk({az:'SV-2026-0133',schadennr:'FE-2207',sparte:'Feuer',auftraggeber:'Musterversicherung AG',sachbearbeiter:'Fr. Klein',
+    vn:'Bäckerei Hansen',tel:'0228 333 999',mail:'hansen@example.de',ort:'Markt 3, 53111 Bonn',lat:50.735,lon:7.101,eingang:addDays(t,-20),
+    beschreibung:'Brand in Backstube, Ruß in Verkaufsraum.'});
+  a3.workflow.slice(0,5).forEach(s=>s.done=true);
+  a3.termine.push({id:uid(),datum:t,zeit:'10:00',art:'Nachbesichtigung',ort:a3.ort,lat:a3.lat,lon:a3.lon});
+  a3.pruefungen.push({id:uid(),typ:'Angebot',firma:'Sanierung Rhein GmbH',datum:addDays(t,-3),positionen:[
+    {text:'Rußreinigung Verkaufsraum',menge:85,einheit:'m²',ep:18.5,anerkannt_ep:16},
+    {text:'Ozonbehandlung',menge:1,einheit:'psch',ep:1450,anerkannt_ep:1450},
+    {text:'Malerarbeiten Decke',menge:85,einheit:'m²',ep:14,anerkannt_ep:11.5},
+    {text:'Baustelleneinrichtung',menge:1,einheit:'psch',ep:950,anerkannt_ep:400}],bemerkung:''});
+  const inbox=[
+    {id:uid(),von:'k.klein@musterversicherung.example',betreff:'Neuer Auftrag Schaden LW-990117 – Ortsbesichtigung',datum:t,
+      text:'Sehr geehrte Damen und Herren,\nbitte übernehmen Sie Schaden LW-990117, VN Hr. Schulz, Ringstr. 4, 50996 Köln, Tel. 0221 777 888. Leitungswasserschaden Bad OG.\nMfG Klein',zugeordnet:null},
+    {id:uid(),von:'becker@example.de',betreff:'AW: SV-2026-0141 Termin',datum:t,
+      text:'Hallo, wir können Donnerstag ab 9 Uhr. Grüße Becker',zugeordnet:null},
+    {id:uid(),von:'info@sanierung-rhein.example',betreff:'Rechnung zu Schaden FE-2207',datum:addDays(t,-1),
+      text:'Anbei unsere Schlussrechnung über 4.980,00 € netto.',zugeordnet:null},
+  ];
+  return {akten:[a1,a2,a3],inbox,anrufe:[],nextNr:143};
+}
+let DB; try{DB=JSON.parse(localStorage.getItem('schadenakte'))}catch(e){}
+if(!DB) DB=demo();
+const save=()=>{try{localStorage.setItem('schadenakte',JSON.stringify(DB))}catch(e){}};
+function resetDemo(){ if(confirm('Alle Daten auf Demo zurücksetzen?')){DB=demo();save();go('assistenz');} }
+
+/* ============================================================
+   ASSISTENZ-ENGINE
+   Erzeugt Aufgaben und Erinnerungen aus dem Zustand der Akten.
+   Der Sachverständige legt keine Aufgabe selbst an – sie entsteht aus Regeln.
+   ============================================================ */
+function aufgaben(){
+  const out=[]; const t=TODAY();
+  const push=(akte,key,text,faellig,prio,aktion)=>{
+    if(akte && akte.erledigteAufgaben.includes(key)) return;
+    out.push({akte,key,text,faellig,prio,aktion});
+  };
+  for(const a of DB.akten.filter(a=>a.status!=='abgeschlossen')){
+    // 1) Nächster offener Workflow-Schritt
+    const next=a.workflow.find(s=>!s.done);
+    if(next){
+      const diff=daysBetween(t,next.faellig);
+      push(a,'wf:'+next.id,next.t,next.faellig,diff<0?3:diff<=1?2:1,{typ:'wf',id:next.id});
+    }
+    // 2) Termin nötig, aber keiner geplant
+    const terminSchritt=a.workflow.find(s=>s.kind==='termin');
+    if(terminSchritt && !terminSchritt.done && a.termine.length===0 && daysBetween(a.eingang,t)>=1)
+      push(a,'kein-termin','Noch kein Ortstermin geplant – VN anrufen: '+a.tel,t,3,{typ:'tab',tab:'termine'});
+    // 3) Termin morgen → Vorbereitung
+    for(const tm of a.termine){
+      if(tm.datum===addDays(t,1)) push(a,'vorb:'+tm.id,`Termin morgen ${tm.zeit} vorbereiten (Unterlagen, Messgeräte)`,t,2,{typ:'tab',tab:'termine'});
+      if(tm.datum<t && !tm.protokoll) push(a,'prot:'+tm.id,`Protokoll für Termin vom ${fmt(tm.datum)} fehlt`,t,2,{typ:'tab',tab:'gutachten'});
+    }
+    // 4) Zugeordnete, ungelesene E-Mails
+    for(const m of a.emails.filter(m=>!m.erledigt))
+      push(a,'mail:'+m.id,'E-Mail bearbeiten: '+m.betreff,m.datum,2,{typ:'tab',tab:'kommunikation'});
+    // 5) Prüfungen ohne Bericht
+    for(const p of a.pruefungen.filter(p=>!p.versendet))
+      push(a,'pr:'+p.id,`${p.typ}sprüfung ${p.firma} abschließen und versenden`,addDays(p.datum,5),2,{typ:'tab',tab:'pruefung'});
+    // 6) Gutachten-Pflichtfelder unvollständig, obwohl Gutachten-Schritt ansteht
+    const gs=a.workflow.find(s=>s.kind==='gutachten'&&!s.done);
+    if(gs && daysBetween(t,gs.faellig)<=3){
+      const fehlt=['ursache','befund','deckung','schadenhoehe_netto','fazit'].filter(k=>!a.gutachten[k]);
+      if(fehlt.length) push(a,'gf:'+fehlt.join(),`Gutachten: ${fehlt.length} Pflichtfelder offen (${fehlt.join(', ')})`,gs.faellig,2,{typ:'tab',tab:'gutachten'});
+    }
+    // 7) Keine Aktivität seit 7 Tagen
+    const last=[a.eingang,...a.notizen.map(n=>n.datum),...a.emails.map(m=>m.datum),...a.termine.map(x=>x.datum)].sort().pop();
+    if(daysBetween(last,t)>=7) push(a,'ruhe:'+last,`Seit ${daysBetween(last,t)} Tagen keine Aktivität – Sachstand an ${a.sachbearbeiter} melden`,t,1,{typ:'tab',tab:'kommunikation'});
+  }
+  // 8) Nicht zugeordnete E-Mails im Posteingang
+  const offen=DB.inbox.filter(m=>!m.zugeordnet).length;
+  if(offen) out.push({akte:null,key:'inbox',text:`${offen} E-Mail(s) im Posteingang nicht zugeordnet`,faellig:t,prio:2,aktion:{typ:'view',view:'posteingang'}});
+  return out.sort((x,y)=>y.prio-x.prio||x.faellig.localeCompare(y.faellig));
+}
+function aufgabeErledigt(aktenId,key,wfId){
+  const a=DB.akten.find(a=>a.id===aktenId);
+  if(wfId){ const s=a.workflow.find(s=>s.id===wfId); s.done=true; log(a,'Workflow: „'+s.t+'“ erledigt'); }
+  else a.erledigteAufgaben.push(key);
+  save(); render();
+}
+
+/* ---------- E-Mail-Zuordnung ----------
+   Erkennt Aktenzeichen, Schadennummer oder Absenderadresse. */
+function erkenneAkte(m){
+  const txt=(m.betreff+' '+m.text).toUpperCase();
+  return DB.akten.find(a=>txt.includes(a.az.toUpperCase())||txt.includes(a.schadennr.toUpperCase())||m.von.toLowerCase()===a.mail.toLowerCase());
+}
+function istNeuerAuftrag(m){ return /neuer auftrag|beauftrag|bitte übernehmen/i.test(m.betreff+' '+m.text); }
+function extrahiereAuftrag(m){
+  const g=(re)=>{const x=(m.text.match(re)||[])[1];return x?x.trim():''};
+  const sparteRaw=/leitungswasser/i.test(m.text)?'Leitungswasser':/sturm|hagel/i.test(m.text)?'Sturm/Hagel':/brand|feuer/i.test(m.text)?'Feuer':/kfz|fahrzeug|unfall/i.test(m.text)?'Kfz':'Leitungswasser';
+  return {schadennr:g(/Schaden\s+([A-Z]{1,3}-\d+)/i),vn:g(/VN\s+([^,]+)/),ort:g(/VN\s+[^,]+,\s*([^,]+,\s*\d{5}\s+[^\s.,]+)/),
+    tel:g(/Tel\.?\s*([\d\s\/]+)/),sparte:sparteRaw,auftraggeber:m.von.split('@')[1]||'',beschreibung:m.text.split('\n').slice(1,3).join(' ')};
+}
+function zuordnen(mailId,aktenId){
+  const m=DB.inbox.find(x=>x.id===mailId), a=DB.akten.find(x=>x.id===aktenId);
+  m.zugeordnet=a.az; a.emails.push({...m,erledigt:false}); log(a,'E-Mail zugeordnet: '+m.betreff);
+  save(); render();
+}
+function akteAusMail(mailId){
+  const m=DB.inbox.find(x=>x.id===mailId); const d=extrahiereAuftrag(m);
+  const a=neueAkte({...d,mail:'',lat:null,lon:null,sachbearbeiter:m.von});
+  zuordnen(mailId,a.id); openAkte(a.id);
+}
+function neueAkte(d){
+  const sparte=d.sparte||'Leitungswasser', eingang=TODAY();
+  const a={id:uid(),az:'SV-2026-'+String(DB.nextNr++).padStart(4,'0'),schadennr:d.schadennr||'',sparte,auftraggeber:d.auftraggeber||'',
+    sachbearbeiter:d.sachbearbeiter||'',vn:d.vn||'',tel:d.tel||'',mail:d.mail||'',ort:d.ort||'',lat:d.lat??null,lon:d.lon??null,eingang,
+    beschreibung:d.beschreibung||'',status:'offen',notizen:[],emails:[],termine:[],pruefungen:[],gutachten:{},erledigteAufgaben:[],
+    workflow:SPARTEN[sparte].map(s=>({...s,id:uid(),done:false,faellig:addDays(eingang,s.d)}))};
+  DB.akten.unshift(a); log(a,'Akte angelegt'); save(); return a;
+}
+function log(a,text){ a.notizen.unshift({id:uid(),datum:TODAY(),typ:'system',text}); }
+const fmt=d=>d?new Date(d).toLocaleDateString('de-DE'):'';
+
+/* ---------- Routenplanung ----------
+   Nächster-Nachbar-Heuristik ab Büro; Ausgabe als Google-Maps-Route. */
+const BUERO={name:'Büro',lat:50.9375,lon:6.9603,ort:'Köln Innenstadt'};
+function dist(a,b){const R=6371,r=Math.PI/180,dLat=(b.lat-a.lat)*r,dLon=(b.lon-a.lon)*r;
+  const h=Math.sin(dLat/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
+function route(stops){
+  const rest=stops.filter(s=>s.lat!=null), order=[]; let cur=BUERO, km=0;
+  while(rest.length){ rest.sort((x,y)=>dist(cur,x)-dist(cur,y)); const n=rest.shift(); km+=dist(cur,n); order.push(n); cur=n; }
+  km+=order.length?dist(cur,BUERO):0;
+  return {order,km:km*1.3}; // Faktor 1,3: Luftlinie → Straße (grobe Schätzung)
+}
+
+/* ============================================================
+   PDF-ERZEUGUNG
+   ============================================================ */
+function pdfKopf(doc,titel,a){
+  doc.setFontSize(16);doc.text(titel,14,18);doc.setFontSize(9);
+  doc.text(`Aktenzeichen ${a.az}  ·  Schaden-Nr. ${a.schadennr}  ·  ${a.sparte}`,14,25);
+  doc.text(`Auftraggeber: ${a.auftraggeber} (${a.sachbearbeiter})  ·  VN: ${a.vn}`,14,30);
+  doc.text(`Risikoort: ${a.ort}  ·  Erstellt: ${fmt(TODAY())}`,14,35);
+}
+function pdfGutachten(a){
+  const {jsPDF}=window.jspdf; if(!jsPDF) return alert('PDF-Bibliothek nicht geladen (offline?)');
+  const doc=new jsPDF(); pdfKopf(doc,'Gutachten',a);
+  doc.autoTable({startY:42,head:[['Feld','Inhalt']],columnStyles:{0:{cellWidth:55,fontStyle:'bold'}},
+    body:GUTACHTEN_FELDER.map(([k,l,typ])=>[l,typ==='date'?fmt(a.gutachten[k]):(typ==='number'&&k.includes('hoehe')||k.includes('abzug'))&&a.gutachten[k]?eur(a.gutachten[k]):a.gutachten[k]||'—'])});
+  if(a.termine.length){ doc.autoTable({startY:doc.lastAutoTable.finalY+8,head:[['Termin','Art','Protokoll']],
+    body:a.termine.map(t=>[fmt(t.datum)+' '+t.zeit,t.art,t.protokoll||'—'])}); }
+  doc.save(`${a.az}_Gutachten.pdf`); log(a,'Gutachten-PDF erstellt'); save();
+}
+function pdfPruefung(a,p){
+  const {jsPDF}=window.jspdf; if(!jsPDF) return alert('PDF-Bibliothek nicht geladen (offline?)');
+  const doc=new jsPDF(); pdfKopf(doc,p.typ+'sprüfung',a);
+  doc.setFontSize(10);doc.text(`${p.typ} ${p.firma} vom ${fmt(p.datum)}`,14,43);
+  const s=summen(p);
+  doc.autoTable({startY:48,head:[['Position','Menge','EP gefordert','EP anerkannt','GP gefordert','GP anerkannt','Kürzung']],
+    body:p.positionen.map(x=>[x.text,x.menge+' '+x.einheit,eur(x.ep),eur(x.anerkannt_ep),eur(x.menge*x.ep),eur(x.menge*x.anerkannt_ep),eur(x.menge*(x.ep-x.anerkannt_ep))]),
+    foot:[['Summe netto','','','',eur(s.gef),eur(s.anr),eur(s.gef-s.anr)]],styles:{fontSize:8}});
+  if(p.bemerkung){doc.setFontSize(9);doc.text(doc.splitTextToSize('Bemerkung: '+p.bemerkung,180),14,doc.lastAutoTable.finalY+8);}
+  doc.save(`${a.az}_${p.typ}spruefung_${p.firma.replace(/\W+/g,'_')}.pdf`);
+  p.versendet=true; log(a,`${p.typ}sprüfung ${p.firma} als PDF erstellt`); save(); render();
+}
+const summen=p=>({gef:p.positionen.reduce((s,x)=>s+x.menge*x.ep,0),anr:p.positionen.reduce((s,x)=>s+x.menge*x.anerkannt_ep,0)});
+
+/* ============================================================
+   UI
+   ============================================================ */
+let VIEW='assistenz', AKTE=null, TAB='uebersicht';
+const VIEWS=[['assistenz','Assistenz'],['akten','Akten'],['posteingang','Posteingang'],['termine','Termine & Route'],['workflows','Workflows']];
+function go(v){VIEW=v;AKTE=null;render();}
+function openAkte(id,tab='uebersicht'){VIEW='akte';AKTE=id;TAB=tab;render();}
+function render(){
+  const offen=DB.inbox.filter(m=>!m.zugeordnet).length, tasks=aufgaben().filter(x=>x.prio>=2).length;
+  document.getElementById('nav').innerHTML=VIEWS.map(([k,l])=>`<button class="${VIEW===k?'active':''}" onclick="go('${k}')">${l}${
+    k==='assistenz'&&tasks?`<span class="badge">${tasks}</span>`:''}${k==='posteingang'&&offen?`<span class="badge">${offen}</span>`:''}</button>`).join('');
+  const app=document.getElementById('app');
+  app.innerHTML={assistenz:vAssistenz,akten:vAkten,posteingang:vPosteingang,termine:vTermine,workflows:vWorkflows,akte:vAkte}[VIEW]();
+}
+const prioFarbe=p=>p>=3?'var(--bad)':p===2?'var(--warn)':'var(--muted)';
+function taskHtml(x,showAkte=true){
+  const a=x.akte, ueber=a&&daysBetween(TODAY(),x.faellig)<0;
+  const jump=x.aktion.typ==='view'?`go('${x.aktion.view}')`:x.aktion.typ==='tab'?`openAkte('${a.id}','${x.aktion.tab}')`:`openAkte('${a.id}')`;
+  return `<div class="task"><span class="prio" style="background:${prioFarbe(x.prio)}"></span>
+    <div style="flex:1"><div>${esc(x.text)}</div><div class="muted" style="font-size:12px">${showAkte&&a?esc(a.az+' · '+a.vn+' · '):''}
+      <span class="${ueber?'bad':''}">fällig ${fmt(x.faellig)}${ueber?' (überfällig)':''}</span></div></div>
+    <button class="btn" onclick="${jump}">Öffnen</button>
+    ${a?`<button class="btn" onclick="aufgabeErledigt('${a.id}','${esc(x.key)}',${x.aktion.typ==='wf'?`'${x.aktion.id}'`:'null'})">Erledigt</button>`:''}</div>`;
+}
+function vAssistenz(){
+  const t=aufgaben(), heute=DB.akten.flatMap(a=>a.termine.filter(x=>x.datum===TODAY()).map(x=>({...x,a})));
+  return `<div class="grid">
+  <div class="card" style="grid-column:1/-1"><h2>Guten Tag – das steht heute an</h2>
+    <p class="muted">Alle Aufgaben unten wurden automatisch aus Workflows, Fristen, Terminen und E-Mails erzeugt. Nichts davon wurde manuell angelegt.</p>
+    ${t.length?t.map(x=>taskHtml(x)).join(''):'<p class="ok">Alles erledigt.</p>'}</div>
+  <div class="card"><h2>Termine heute</h2>${heute.length?heute.sort((x,y)=>x.zeit.localeCompare(y.zeit)).map(x=>`<div class="task"><b>${x.zeit}</b><div style="flex:1">${esc(x.art)} – ${esc(x.a.vn)}<br><span class="muted">${esc(x.ort)}</span></div></div>`).join(''):'<p class="muted">Keine</p>'}
+    <button class="btn" onclick="go('termine')">Route planen</button></div>
+  <div class="card"><h2>Kennzahlen</h2><table>
+    <tr><td>Offene Akten</td><td><b>${DB.akten.filter(a=>a.status!=='abgeschlossen').length}</b></td></tr>
+    <tr><td>Überfällige Schritte</td><td class="bad"><b>${DB.akten.flatMap(a=>a.workflow.filter(s=>!s.done&&s.faellig<TODAY())).length}</b></td></tr>
+    <tr><td>Ø Laufzeit offener Akten</td><td><b>${Math.round(DB.akten.reduce((s,a)=>s+daysBetween(a.eingang,TODAY()),0)/Math.max(1,DB.akten.length))} Tage</b></td></tr>
+    <tr><td>Geprüftes Volumen / Kürzung</td><td><b>${eur(DB.akten.flatMap(a=>a.pruefungen).reduce((s,p)=>s+summen(p).gef,0))} / ${eur(DB.akten.flatMap(a=>a.pruefungen).reduce((s,p)=>s+summen(p).gef-summen(p).anr,0))}</b></td></tr>
+  </table></div></div>`;
+}
+function vAkten(){
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Akten</h2>
+    <div class="row"><input id="such" placeholder="Suche AZ, VN, Ort…" oninput="filterAkten(this.value)" style="width:220px"><button class="btn primary" onclick="dlgNeueAkte()">+ Neue Akte</button></div></div>
+  <table id="aktentab"><tr><th>AZ</th><th>VN</th><th>Sparte</th><th>Auftraggeber</th><th>Fortschritt</th><th>Nächster Schritt</th></tr>
+  ${DB.akten.map(a=>{const d=a.workflow.filter(s=>s.done).length,n=a.workflow.find(s=>!s.done);
+    return `<tr class="click" data-s="${esc((a.az+a.vn+a.ort+a.schadennr).toLowerCase())}" onclick="openAkte('${a.id}')"><td><b>${esc(a.az)}</b><br><span class="muted">${esc(a.schadennr)}</span></td><td>${esc(a.vn)}<br><span class="muted">${esc(a.ort)}</span></td>
+    <td>${esc(a.sparte)}</td><td>${esc(a.auftraggeber)}</td><td>${d}/${a.workflow.length}</td><td class="${n&&n.faellig<TODAY()?'bad':''}">${n?esc(n.t)+'<br><span class="muted">'+fmt(n.faellig)+'</span>':'<span class="ok">fertig</span>'}</td></tr>`}).join('')}
+  </table></div>`;
+}
+function filterAkten(q){q=q.toLowerCase();document.querySelectorAll('#aktentab tr[data-s]').forEach(r=>r.style.display=r.dataset.s.includes(q)?'':'none');}
+function dlgNeueAkte(){
+  const vn=prompt('Versicherungsnehmer:'); if(!vn) return;
+  const sparte=prompt('Sparte ('+Object.keys(SPARTEN).join(', ')+'):','Leitungswasser');
+  if(!SPARTEN[sparte]) return alert('Unbekannte Sparte');
+  const a=neueAkte({vn,sparte,ort:prompt('Risikoort:')||'',tel:prompt('Telefon:')||''}); openAkte(a.id);
+}
+function vPosteingang(){
+  return `<div class="card"><h2>Posteingang</h2><p class="muted">Prototyp: E-Mails sind simuliert. Die Zuordnung erkennt Aktenzeichen, Schadennummer und Absender. Neue Aufträge werden erkannt und als Akte vorgeschlagen.</p>
+  ${DB.inbox.map(m=>{const vor=erkenneAkte(m), neu=!vor&&istNeuerAuftrag(m);
+    return `<div class="card" style="margin:10px 0"><div class="row" style="justify-content:space-between"><b>${esc(m.betreff)}</b><span class="muted">${esc(m.von)} · ${fmt(m.datum)}</span></div>
+    <pre style="white-space:pre-wrap;font:inherit;margin:8px 0">${esc(m.text)}</pre>
+    ${m.zugeordnet?`<span class="ok">✓ zugeordnet zu ${esc(m.zugeordnet)}</span>`:`<div class="row">
+      ${vor?`<span class="pill">Vorschlag: ${esc(vor.az)} (${esc(vor.vn)})</span><button class="btn primary" onclick="zuordnen('${m.id}','${vor.id}')">Zuordnen</button>`:''}
+      ${neu?`<span class="pill">Erkannt: neuer Auftrag</span><button class="btn primary" onclick="akteAusMail('${m.id}')">Akte daraus anlegen</button>`:''}
+      <select onchange="this.value&&zuordnen('${m.id}',this.value)" style="width:auto"><option value="">manuell zuordnen…</option>${DB.akten.map(a=>`<option value="${a.id}">${esc(a.az)} – ${esc(a.vn)}</option>`).join('')}</select></div>`}
+    </div>`}).join('')}
+  <h3>Simulierten Eingang hinzufügen</h3>
+  <div class="grid"><div><label>Von</label><input id="m_von" value="kunde@example.de"></div><div><label>Betreff</label><input id="m_betr" placeholder="z. B. Frage zu SV-2026-0142"></div></div>
+  <label>Text</label><textarea id="m_text"></textarea><p><button class="btn" onclick="mailRein()">Empfangen</button></p></div>`;
+}
+function mailRein(){
+  const m={id:uid(),von:val('m_von'),betreff:val('m_betr'),text:val('m_text'),datum:TODAY(),zugeordnet:null};
+  if(!m.betreff) return; DB.inbox.unshift(m);
+  const a=erkenneAkte(m); if(a && !istNeuerAuftrag(m)) zuordnen(m.id,a.id); else {save();render();}
+}
+const val=id=>document.getElementById(id).value;
+function vTermine(){
+  const datum=window.ROUTE_DATUM||TODAY();
+  const stops=DB.akten.flatMap(a=>a.termine.filter(t=>t.datum===datum).map(t=>({...t,az:a.az,vn:a.vn})));
+  const r=route(stops);
+  const url='https://www.google.com/maps/dir/'+[BUERO,...r.order,BUERO].map(s=>encodeURIComponent(s.ort)).join('/');
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Tagesroute</h2>
+    <input type="date" value="${datum}" style="width:auto" onchange="window.ROUTE_DATUM=this.value;render()"></div>
+  ${r.order.length?`<ol>${r.order.map(s=>`<li><b>${esc(s.zeit)}</b> ${esc(s.art)} – ${esc(s.vn)} (${esc(s.az)})<br><span class="muted">${esc(s.ort)}</span></li>`).join('')}</ol>
+    <p>Geschätzte Strecke: <b>${Math.round(r.km)} km</b> (Rundtour ab ${BUERO.ort})</p>
+    ${r.order.some((s,i)=>i&&s.zeit<r.order[i-1].zeit)?'<p class="warn">⚠ Die kürzeste Reihenfolge passt nicht zu den vereinbarten Uhrzeiten – Termine ggf. tauschen.</p>':''}
+    <a class="btn primary" href="${url}" target="_blank" rel="noopener">In Google Maps öffnen</a>`:'<p class="muted">Keine Termine mit Koordinaten an diesem Tag.</p>'}
+  </div>
+  <div class="card"><h2>Alle Termine</h2><table><tr><th>Datum</th><th>Zeit</th><th>Akte</th><th>Art</th><th>Ort</th></tr>
+  ${DB.akten.flatMap(a=>a.termine.map(t=>({...t,a}))).sort((x,y)=>(x.datum+x.zeit).localeCompare(y.datum+y.zeit)).map(t=>`<tr class="click" onclick="openAkte('${t.a.id}','termine')"><td>${fmt(t.datum)}</td><td>${t.zeit}</td><td>${esc(t.a.az)}</td><td>${esc(t.art)}</td><td>${esc(t.ort)}</td></tr>`).join('')}
+  </table></div>`;
+}
+function vWorkflows(){
+  return `<div class="card"><h2>Workflow-Vorlagen je Sparte</h2><p class="muted">Neue Akten übernehmen die Vorlage ihrer Sparte. In der Akte selbst kann der Ablauf danach frei angepasst werden, ohne die Vorlage zu ändern.</p></div>
+  <div class="grid">${Object.entries(SPARTEN).map(([k,steps])=>`<div class="card"><h2>${esc(k)}</h2>${steps.map(s=>`<div class="step"><span style="flex:1">${esc(s.t)}</span><span class="pill">T+${s.d}</span>${s.kind?`<span class="pill">${s.kind}</span>`:''}</div>`).join('')}</div>`).join('')}</div>`;
+}
+
+/* ---------- Akte ---------- */
+function vAkte(){
+  const a=DB.akten.find(x=>x.id===AKTE);
+  const tabs=[['uebersicht','Übersicht'],['workflow','Workflow'],['kommunikation','Kommunikation'],['termine','Termine'],['gutachten','Gutachten'],['pruefung','Angebots-/Rechnungsprüfung']];
+  const t=aufgaben().filter(x=>x.akte===a);
+  return `<div class="row" style="justify-content:space-between;margin-bottom:10px"><div><button class="btn" onclick="go('akten')">← Akten</button>
+    <b style="font-size:17px;margin-left:8px">${esc(a.az)}</b> <span class="muted">${esc(a.vn)} · ${esc(a.sparte)}</span></div>
+    <div class="row"><button class="btn primary" onclick="pdfGutachten(DB.akten.find(x=>x.id==='${a.id}'))">Gutachten als PDF</button>
+    <button class="btn" onclick="akteSchliessen('${a.id}')">${a.status==='abgeschlossen'?'Wieder öffnen':'Akte abschließen'}</button></div></div>
+  <div class="tabs">${tabs.map(([k,l])=>`<button class="btn ${TAB===k?'primary':''}" onclick="TAB='${k}';render()">${l}</button>`).join('')}</div>
+  ${{uebersicht:tUebersicht,workflow:tWorkflow,kommunikation:tKomm,termine:tTermine,gutachten:tGutachten,pruefung:tPruefung}[TAB](a,t)}`;
+}
+function akteSchliessen(id){const a=DB.akten.find(x=>x.id===id);a.status=a.status==='abgeschlossen'?'offen':'abgeschlossen';log(a,'Status: '+a.status);save();render();}
+function setF(id,k,v){const a=DB.akten.find(x=>x.id===id);a[k]=v;save();}
+function tUebersicht(a,t){
+  const f=(k,l)=>`<label>${l}</label><input value="${esc(a[k])}" onchange="setF('${a.id}','${k}',this.value)">`;
+  const d=a.workflow.filter(s=>s.done).length;
+  return `<div class="grid"><div class="card"><h2>Stammdaten</h2>${f('schadennr','Schaden-Nr.')}${f('auftraggeber','Auftraggeber')}${f('sachbearbeiter','Sachbearbeiter VR')}
+    ${f('vn','Versicherungsnehmer')}${f('tel','Telefon')}${f('mail','E-Mail')}${f('ort','Risikoort')}
+    <label>Beschreibung</label><textarea onchange="setF('${a.id}','beschreibung',this.value)">${esc(a.beschreibung)}</textarea></div>
+  <div><div class="card"><h2>Stand</h2><p>Eingang ${fmt(a.eingang)} · ${daysBetween(a.eingang,TODAY())} Tage · Workflow ${d}/${a.workflow.length}</p>
+    <div style="height:8px;background:var(--line);border-radius:4px"><div style="height:8px;width:${100*d/a.workflow.length}%;background:var(--accent);border-radius:4px"></div></div>
+    <p class="row" style="margin-top:10px"><a class="btn" href="tel:${esc(a.tel)}">📞 Anrufen</a><a class="btn" href="mailto:${esc(a.mail)}?subject=${encodeURIComponent(a.az+' / '+a.schadennr)}">✉ E-Mail</a></p></div>
+  <div class="card"><h2>Offene Aufgaben</h2>${t.length?t.map(x=>taskHtml(x,false)).join(''):'<p class="muted">Keine</p>'}</div>
+  <div class="card"><h2>Verlauf</h2>${a.notizen.slice(0,8).map(n=>`<div class="muted" style="font-size:12px">${fmt(n.datum)} · ${esc(n.text)}</div>`).join('')}</div></div></div>`;
+}
+function tWorkflow(a){
+  return `<div class="card"><h2>Workflow dieser Akte</h2><p class="muted">Vorlage: ${esc(a.sparte)}. Änderungen gelten nur für diese Akte.</p>
+  ${a.workflow.map((s,i)=>`<div class="step ${s.done?'done':''}"><input type="checkbox" style="width:auto" ${s.done?'checked':''} onchange="wfToggle('${a.id}',${i})">
+    <span style="flex:1">${esc(s.t)}</span><input type="date" value="${s.faellig}" style="width:150px" onchange="wfDate('${a.id}',${i},this.value)">
+    <button class="btn" onclick="wfMove('${a.id}',${i},-1)">↑</button><button class="btn" onclick="wfMove('${a.id}',${i},1)">↓</button><button class="btn" onclick="wfDel('${a.id}',${i})">✕</button></div>`).join('')}
+  <div class="row" style="margin-top:10px"><input id="wf_neu" placeholder="Zusätzlicher Schritt, z. B. Statiker hinzuziehen" style="flex:1"><input id="wf_tage" type="number" value="3" style="width:80px" title="Tage ab heute"><button class="btn primary" onclick="wfAdd('${a.id}')">+ Schritt</button></div></div>`;
+}
+const A=id=>DB.akten.find(x=>x.id===id);
+function wfToggle(id,i){const a=A(id);a.workflow[i].done=!a.workflow[i].done;if(a.workflow[i].done)log(a,'Workflow: „'+a.workflow[i].t+'“ erledigt');save();render();}
+function wfDate(id,i,v){A(id).workflow[i].faellig=v;save();}
+function wfMove(id,i,d){const w=A(id).workflow,j=i+d;if(j<0||j>=w.length)return;[w[i],w[j]]=[w[j],w[i]];save();render();}
+function wfDel(id,i){A(id).workflow.splice(i,1);save();render();}
+function wfAdd(id){const t=val('wf_neu');if(!t)return;const a=A(id);a.workflow.push({id:uid(),t,d:0,done:false,faellig:addDays(TODAY(),+val('wf_tage')||0)});log(a,'Workflow-Schritt ergänzt: '+t);save();render();}
+function tKomm(a){
+  return `<div class="grid"><div class="card"><h2>E-Mails</h2>${a.emails.length?a.emails.map(m=>`<div class="task"><div style="flex:1"><b>${esc(m.betreff)}</b> <span class="muted">${esc(m.von)} · ${fmt(m.datum)}</span><pre style="white-space:pre-wrap;font:inherit;margin:4px 0">${esc(m.text)}</pre></div>
+    ${m.erledigt?'<span class="ok">✓</span>':`<button class="btn" onclick="mailErledigt('${a.id}','${m.id}')">Erledigt</button>`}</div>`).join(''):'<p class="muted">Keine</p>'}
+    <a class="btn" href="mailto:${esc(a.mail)}?subject=${encodeURIComponent(a.az+' / '+a.schadennr)}">Neue E-Mail</a></div>
+  <div class="card"><h2>Telefonnotiz</h2><label>Gesprächspartner</label><input id="t_mit" value="${esc(a.vn)}">
+    <label>Inhalt</label><textarea id="t_text"></textarea>
+    <label>Wiedervorlage in Tagen (optional – erzeugt Aufgabe)</label><input id="t_wv" type="number">
+    <p><button class="btn primary" onclick="telefonat('${a.id}')">Speichern</button></p>
+    <h3>Notizen & Verlauf</h3>${a.notizen.map(n=>`<div style="font-size:12px;padding:3px 0"><span class="muted">${fmt(n.datum)} · ${n.typ}</span> ${esc(n.text)}</div>`).join('')}</div></div>`;
+}
+function mailErledigt(id,mid){const a=A(id);a.emails.find(m=>m.id===mid).erledigt=true;save();render();}
+function telefonat(id){
+  const a=A(id),txt=val('t_text');if(!txt)return;
+  a.notizen.unshift({id:uid(),datum:TODAY(),typ:'telefon',text:val('t_mit')+': '+txt});
+  const wv=+val('t_wv'); if(wv){ const i=a.workflow.findIndex(s=>!s.done); a.workflow.splice(i<0?a.workflow.length:i,0,{id:uid(),t:'Wiedervorlage: '+txt.slice(0,50),d:0,done:false,faellig:addDays(TODAY(),wv)}); }
+  // Termin im Text erkannt? → Hinweis
+  if(/termin|uhr|montag|dienstag|mittwoch|donnerstag|freitag/i.test(txt)) alert('Hinweis: Im Gespräch wurde offenbar ein Termin besprochen – bitte im Reiter „Termine“ eintragen.');
+  save();render();
+}
+function tTermine(a){
+  return `<div class="card"><h2>Termine</h2><table><tr><th>Datum</th><th>Zeit</th><th>Art</th><th>Protokoll</th></tr>
+  ${a.termine.map((t,i)=>`<tr><td>${fmt(t.datum)}</td><td>${t.zeit}</td><td>${esc(t.art)}</td><td><textarea onchange="A('${a.id}').termine[${i}].protokoll=this.value;save()" placeholder="Protokoll / Feststellungen">${esc(t.protokoll||'')}</textarea></td></tr>`).join('')}</table>
+  <h3>Neuer Termin</h3><div class="grid"><div><label>Datum</label><input id="tm_d" type="date" value="${addDays(TODAY(),2)}"></div><div><label>Uhrzeit</label><input id="tm_z" type="time" value="10:00"></div>
+  <div><label>Art</label><select id="tm_a"><option>Ortstermin</option><option>Nachbesichtigung</option><option>Telefontermin</option></select></div></div>
+  <p><button class="btn primary" onclick="terminAdd('${a.id}')">Termin anlegen</button> <span class="muted">Erzeugt automatisch Vorbereitungs- und Protokoll-Erinnerungen; „Ortstermin vereinbaren“ wird abgehakt.</span></p></div>`;
+}
+function terminAdd(id){
+  const a=A(id);a.termine.push({id:uid(),datum:val('tm_d'),zeit:val('tm_z'),art:val('tm_a'),ort:a.ort,lat:a.lat,lon:a.lon});
+  const s=a.workflow.find(s=>s.kind==='termin'&&!s.done); if(s){s.done=true;}
+  const durch=a.workflow.find(s=>/durchführen|besichtigung$/i.test(s.t)&&!s.done); if(durch) durch.faellig=val('tm_d');
+  log(a,`Termin ${val('tm_a')} am ${fmt(val('tm_d'))} ${val('tm_z')} angelegt`);save();render();
+}
+function tGutachten(a){
+  const g=a.gutachten;
+  const field=([k,l,typ,opt])=>`<div><label>${l}</label>${typ==='textarea'?`<textarea onchange="gSet('${a.id}','${k}',this.value)">${esc(g[k]||'')}</textarea>`:
+    typ==='select'?`<select onchange="gSet('${a.id}','${k}',this.value)"><option></option>${opt.map(o=>`<option ${g[k]===o?'selected':''}>${o}</option>`).join('')}</select>`:
+    `<input type="${typ}" value="${esc(g[k]||'')}" onchange="gSet('${a.id}','${k}',this.value)">`}</div>`;
+  const ausPr=a.pruefungen.reduce((s,p)=>s+summen(p).anr,0);
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Gutachten-Maske</h2><button class="btn primary" onclick="pdfGutachten(A('${a.id}'))">PDF erstellen</button></div>
+  <p class="muted">Jedes Feld ist ein Datenfeld der Akte – auswertbar, durchsuchbar, wiederverwendbar.${ausPr?` Anerkannte Summe aus Prüfungen: <b>${eur(ausPr)}</b> <button class="btn" onclick="gSet('${a.id}','schadenhoehe_netto',${ausPr.toFixed(2)});render()">übernehmen</button>`:''}</p>
+  <div class="grid">${GUTACHTEN_FELDER.map(field).join('')}</div></div>`;
+}
+function gSet(id,k,v){A(id).gutachten[k]=v;save();}
+function tPruefung(a){
+  return a.pruefungen.map((p,pi)=>{const s=summen(p);return `<div class="card"><div class="row" style="justify-content:space-between"><h2>${p.typ}: ${esc(p.firma)} <span class="muted">${fmt(p.datum)}</span></h2>
+    <button class="btn primary" onclick="pdfPruefung(A('${a.id}'),A('${a.id}').pruefungen[${pi}])">Prüfbericht PDF</button></div>
+  <table><tr><th>Position</th><th>Menge</th><th>EP gefordert</th><th>EP anerkannt</th><th>Kürzung</th></tr>
+  ${p.positionen.map((x,i)=>`<tr><td><input value="${esc(x.text)}" onchange="pSet('${a.id}',${pi},${i},'text',this.value)"></td>
+    <td><input type="number" value="${x.menge}" style="width:80px" onchange="pSet('${a.id}',${pi},${i},'menge',+this.value)"> ${esc(x.einheit)}</td>
+    <td><input type="number" step="0.01" value="${x.ep}" onchange="pSet('${a.id}',${pi},${i},'ep',+this.value)"></td>
+    <td><input type="number" step="0.01" value="${x.anerkannt_ep}" onchange="pSet('${a.id}',${pi},${i},'anerkannt_ep',+this.value)"></td>
+    <td class="${x.ep>x.anerkannt_ep?'bad':''}">${eur(x.menge*(x.ep-x.anerkannt_ep))}</td></tr>`).join('')}
+  <tr><td colspan="2"><button class="btn" onclick="pPos('${a.id}',${pi})">+ Position</button></td><td><b>${eur(s.gef)}</b></td><td><b>${eur(s.anr)}</b></td><td class="bad"><b>${eur(s.gef-s.anr)} (${s.gef?Math.round(100*(s.gef-s.anr)/s.gef):0} %)</b></td></tr></table>
+  <label>Bemerkung</label><textarea onchange="A('${a.id}').pruefungen[${pi}].bemerkung=this.value;save()">${esc(p.bemerkung)}</textarea></div>`}).join('')+
+  `<div class="card"><h2>Neue Prüfung</h2><div class="grid"><div><label>Typ</label><select id="p_typ"><option>Angebot</option><option>Rechnung</option></select></div>
+    <div><label>Firma</label><input id="p_firma"></div><div><label>Datum Beleg</label><input id="p_dat" type="date" value="${TODAY()}"></div></div>
+    <p><button class="btn primary" onclick="pNeu('${a.id}')">Anlegen</button></p></div>`;
+}
+function pSet(id,pi,i,k,v){A(id).pruefungen[pi].positionen[i][k]=v;save();render();}
+function pPos(id,pi){A(id).pruefungen[pi].positionen.push({text:'',menge:1,einheit:'Stk',ep:0,anerkannt_ep:0});save();render();}
+function pNeu(id){const f=val('p_firma');if(!f)return;const a=A(id);a.pruefungen.push({id:uid(),typ:val('p_typ'),firma:f,datum:val('p_dat'),positionen:[],bemerkung:''});log(a,val('p_typ')+'sprüfung angelegt: '+f);save();render();}
+
+render();
+</script>
+</body>
+</html>
