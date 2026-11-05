@@ -9,11 +9,12 @@
 <style>
 :root{--bg:#f5f6f8;--panel:#fff;--ink:#1d2330;--muted:#6b7385;--line:#e2e5eb;--accent:#1f5fbf;--warn:#b5651d;--bad:#b3261e;--ok:#2e7d32}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171d;--panel:#1c2028;--ink:#e6e8ec;--muted:#9aa3b5;--line:#2c323d;--accent:#6ea2ff;--warn:#e0a060;--bad:#ff7b72;--ok:#7bc77f}}
+:root[data-theme="dark"]{--bg:#14171d;--panel:#1c2028;--ink:#e6e8ec;--muted:#9aa3b5;--line:#2c323d;--accent:#6ea2ff;--warn:#e0a060;--bad:#ff7b72;--ok:#7bc77f}
 *{box-sizing:border-box}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
 header{display:flex;gap:12px;align-items:center;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
 header h1{font-size:16px;margin:0 12px 0 0}
-nav button,.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 10px;border-radius:6px;cursor:pointer;font:inherit}
+nav button,.btn{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:6px 10px;border-radius:6px;cursor:pointer;font:inherit;text-decoration:none;display:inline-block}
 nav button.active,.btn.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
 .badge{display:inline-block;min-width:18px;padding:0 6px;border-radius:9px;background:var(--bad);color:#fff;font-size:11px;text-align:center;margin-left:4px}
 main{padding:16px;max-width:1200px;margin:auto}
@@ -32,10 +33,14 @@ label{display:block;font-size:12px;color:var(--muted);margin:8px 0 2px}
 .step{display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)}
 .step.done span{text-decoration:line-through;color:var(--muted)}
 .pill{font-size:11px;padding:1px 7px;border-radius:9px;border:1px solid var(--line);color:var(--muted)}
-h2{font-size:15px;margin:0 0 10px}h3{font-size:13px;margin:12px 0 6px}
+h2{font-size:15px;margin:0 0 10px}h3{font-size:13px;margin:14px 0 6px}
 .task{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);align-items:flex-start}
 .task .prio{width:8px;height:8px;border-radius:50%;margin-top:6px;flex:none}
-@media (max-width:640px){main{padding:10px 16px}th:nth-child(n+4),td:nth-child(n+4){display:none}}
+.drop{border:2px dashed var(--line);border-radius:8px;padding:18px;text-align:center;color:var(--muted)}
+.drop.over{border-color:var(--accent);color:var(--accent)}
+.hint{border-left:3px solid var(--warn);padding:4px 10px;margin:6px 0;font-size:13px}
+.res td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+@media (max-width:640px){main{padding:10px 16px}#aktentab th:nth-child(n+4),#aktentab td:nth-child(n+4){display:none}}
 </style>
 </head>
 <body>
@@ -50,349 +55,574 @@ h2{font-size:15px;margin:0 0 10px}h3{font-size:13px;margin:12px 0 6px}
 <script>
 /* ============================================================
    Prototyp: Schadenbearbeitung für Sachverständige
-   - Daten liegen nur im Browser (localStorage). Kein Backend.
-   - Ziel: Abläufe und Assistenzlogik greifbar machen, nicht Produktion.
+   Sparten: Gebäude, Hausrat, Inhalt, Betriebsunterbrechung,
+            Produkthaftpflicht, Transport, Marine (Binnenschifffahrt)
+   Daten nur im Browser (localStorage). Kein Backend.
+   Rechtliche Hinweise/Fristen sind Arbeitshilfen, keine Rechtsberatung.
    ============================================================ */
 
-const TODAY = () => new Date().toISOString().slice(0,10);
-const addDays = (d,n) => { const x=new Date(d); x.setDate(x.getDate()+n); return x.toISOString().slice(0,10); };
-const daysBetween = (a,b) => Math.round((new Date(b)-new Date(a))/864e5);
+/* ---------- Datum & Format ---------- */
+const iso = x => x.toISOString().slice(0,10);
+const D = s => new Date(s+'T00:00:00Z');
+const TODAY = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; };
+const addDays = (s,n) => { const x=D(s); x.setUTCDate(x.getUTCDate()+n); return iso(x); };
+const addMonths = (s,n) => { const x=D(s); x.setUTCMonth(x.getUTCMonth()+n); return iso(x); };
+const addYears = (s,n) => { const x=D(s); x.setUTCFullYear(x.getUTCFullYear()+n); return iso(x); };
+const addOhneSonntag = (s,n) => { const x=D(s); while(n>0){ x.setUTCDate(x.getUTCDate()+1); if(x.getUTCDay()!==0) n--; } return iso(x); };
+const daysBetween = (a,b) => Math.round((D(b)-D(a))/864e5);
+const fmt = d => d ? D(d).toLocaleDateString('de-DE',{timeZone:'UTC'}) : '';
 const uid = () => Math.random().toString(36).slice(2,9);
-const esc = s => String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const eur = n => (Number(n)||0).toLocaleString('de-DE',{style:'currency',currency:'EUR'});
-
-/* ---------- Sparten-Workflows (Vorlagen) ----------
-   Jeder Schritt: Titel, Frist in Tagen ab Auftragseingang, optional Auslöser.
-   Eine Akte kopiert die Vorlage und kann sie danach frei ändern. */
-const SPARTEN = {
-  'Leitungswasser': [
-    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Kontakt VN aufnehmen',d:1},
-    {t:'Ortstermin vereinbaren',d:2,kind:'termin'},{t:'Ortstermin durchführen',d:5},
-    {t:'Leckageortung / Trocknung prüfen',d:7},{t:'Sanierungsangebot prüfen',d:10,kind:'pruefung'},
-    {t:'Gutachten erstellen',d:14,kind:'gutachten'},{t:'Rechnung prüfen',d:30,kind:'pruefung'},
-    {t:'Honorar abrechnen',d:31},{t:'Akte schließen',d:35}],
-  'Sturm/Hagel': [
-    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Wetterdaten abrufen (DWD)',d:1},
-    {t:'Ortstermin vereinbaren',d:2,kind:'termin'},{t:'Ortstermin durchführen',d:5},
-    {t:'Dachdeckerangebot prüfen',d:8,kind:'pruefung'},{t:'Gutachten erstellen',d:12,kind:'gutachten'},
-    {t:'Honorar abrechnen',d:14},{t:'Akte schließen',d:20}],
-  'Feuer': [
-    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Sofortkontakt VN',d:0},
-    {t:'Ortstermin vereinbaren',d:1,kind:'termin'},{t:'Ortstermin durchführen',d:2},
-    {t:'Ermittlungsakte anfordern',d:3},{t:'Sanierungsangebote prüfen',d:14,kind:'pruefung'},
-    {t:'Zwischenbericht an VR',d:10},{t:'Gutachten erstellen',d:21,kind:'gutachten'},
-    {t:'Rechnungen prüfen',d:45,kind:'pruefung'},{t:'Honorar abrechnen',d:46},{t:'Akte schließen',d:50}],
-  'Kfz': [
-    {t:'Auftrag prüfen & Akte anlegen',d:0},{t:'Besichtigungstermin vereinbaren',d:1,kind:'termin'},
-    {t:'Fahrzeugbesichtigung',d:3},{t:'Kalkulation erstellen',d:4},
-    {t:'Gutachten erstellen',d:5,kind:'gutachten'},{t:'Honorar abrechnen',d:6},{t:'Akte schließen',d:10}],
-};
-
-/* ---------- Gutachten-Maske: strukturierte Felder ----------
-   Alle Felder liegen in der Akte und sind auswertbar (Statistik, Suche, PDF). */
-const GUTACHTEN_FELDER = [
-  ['schadentag','Schadentag','date'],['ursache','Schadenursache','select',['Leitungswasser','Sturm','Hagel','Feuer','Elementar','Einbruch','Unfall','Sonstige']],
-  ['ursache_detail','Ursache im Detail','textarea'],['befund','Befund Ortstermin','textarea'],
-  ['betroffene_raeume','Betroffene Räume / Bauteile','textarea'],['flaeche_m2','Betroffene Fläche (m²)','number'],
-  ['deckung','Deckung gegeben?','select',['ja','nein','teilweise','offen']],['vorschaden','Vorschäden','textarea'],
-  ['massnahmen','Empfohlene Maßnahmen','textarea'],['schadenhoehe_netto','Ermittelte Schadenhöhe netto (€)','number'],
-  ['zeitwert_abzug','Abzug neu für alt (€)','number'],['regress','Regressmöglichkeit','select',['keine','prüfen','ja']],
-  ['fazit','Fazit','textarea'],
-];
-
-/* ---------- Demo-Daten ---------- */
-function demo(){
-  const t=TODAY();
-  const mk=(o)=>({id:uid(),notizen:[],emails:[],termine:[],pruefungen:[],gutachten:{},erledigteAufgaben:[],status:'offen',...o,
-    workflow:SPARTEN[o.sparte].map(s=>({...s,id:uid(),done:false,faellig:addDays(o.eingang,s.d)}))});
-  const a1=mk({az:'SV-2026-0141',schadennr:'LW-883421',sparte:'Leitungswasser',auftraggeber:'Musterversicherung AG',sachbearbeiter:'Fr. Klein',
-    vn:'Familie Becker',tel:'0221 555 1234',mail:'becker@example.de',ort:'Venloer Str. 12, 50672 Köln',lat:50.943,lon:6.937,eingang:addDays(t,-6),
-    beschreibung:'Wasseraustritt Küche EG, Feuchtigkeit in Wand zum Bad.'});
-  a1.workflow[0].done=a1.workflow[1].done=true;
-  const a2=mk({az:'SV-2026-0142',schadennr:'ST-11902',sparte:'Sturm/Hagel',auftraggeber:'Beispiel Versicherung',sachbearbeiter:'Hr. Wolf',
-    vn:'Hr. Yilmaz',tel:'0211 444 222',mail:'yilmaz@example.de',ort:'Kölner Str. 80, 40211 Düsseldorf',lat:51.222,lon:6.794,eingang:addDays(t,-2),
-    beschreibung:'Dachziegel abgedeckt, Wassereintritt Dachgeschoss.'});
-  a2.workflow[0].done=true;
-  a2.termine.push({id:uid(),datum:t,zeit:'14:00',art:'Ortstermin',ort:a2.ort,lat:a2.lat,lon:a2.lon});
-  const a3=mk({az:'SV-2026-0133',schadennr:'FE-2207',sparte:'Feuer',auftraggeber:'Musterversicherung AG',sachbearbeiter:'Fr. Klein',
-    vn:'Bäckerei Hansen',tel:'0228 333 999',mail:'hansen@example.de',ort:'Markt 3, 53111 Bonn',lat:50.735,lon:7.101,eingang:addDays(t,-20),
-    beschreibung:'Brand in Backstube, Ruß in Verkaufsraum.'});
-  a3.workflow.slice(0,5).forEach(s=>s.done=true);
-  a3.termine.push({id:uid(),datum:t,zeit:'10:00',art:'Nachbesichtigung',ort:a3.ort,lat:a3.lat,lon:a3.lon});
-  a3.pruefungen.push({id:uid(),typ:'Angebot',firma:'Sanierung Rhein GmbH',datum:addDays(t,-3),positionen:[
-    {text:'Rußreinigung Verkaufsraum',menge:85,einheit:'m²',ep:18.5,anerkannt_ep:16},
-    {text:'Ozonbehandlung',menge:1,einheit:'psch',ep:1450,anerkannt_ep:1450},
-    {text:'Malerarbeiten Decke',menge:85,einheit:'m²',ep:14,anerkannt_ep:11.5},
-    {text:'Baustelleneinrichtung',menge:1,einheit:'psch',ep:950,anerkannt_ep:400}],bemerkung:''});
-  const inbox=[
-    {id:uid(),von:'k.klein@musterversicherung.example',betreff:'Neuer Auftrag Schaden LW-990117 – Ortsbesichtigung',datum:t,
-      text:'Sehr geehrte Damen und Herren,\nbitte übernehmen Sie Schaden LW-990117, VN Hr. Schulz, Ringstr. 4, 50996 Köln, Tel. 0221 777 888. Leitungswasserschaden Bad OG.\nMfG Klein',zugeordnet:null},
-    {id:uid(),von:'becker@example.de',betreff:'AW: SV-2026-0141 Termin',datum:t,
-      text:'Hallo, wir können Donnerstag ab 9 Uhr. Grüße Becker',zugeordnet:null},
-    {id:uid(),von:'info@sanierung-rhein.example',betreff:'Rechnung zu Schaden FE-2207',datum:addDays(t,-1),
-      text:'Anbei unsere Schlussrechnung über 4.980,00 € netto.',zugeordnet:null},
-  ];
-  return {akten:[a1,a2,a3],inbox,anrufe:[],nextNr:143};
-}
-let DB; try{DB=JSON.parse(localStorage.getItem('schadenakte'))}catch(e){}
-if(!DB) DB=demo();
-const save=()=>{try{localStorage.setItem('schadenakte',JSON.stringify(DB))}catch(e){}};
-function resetDemo(){ if(confirm('Alle Daten auf Demo zurücksetzen?')){DB=demo();save();go('assistenz');} }
+const num = v => (v===''||v==null) ? null : Number(v);
 
 /* ============================================================
-   ASSISTENZ-ENGINE
-   Erzeugt Aufgaben und Erinnerungen aus dem Zustand der Akten.
-   Der Sachverständige legt keine Aufgabe selbst an – sie entsteht aus Regeln.
+   SPARTEN: Workflow-Vorlage (Schritte mit Frist T+Tage) + Felder
+   kind: termin | pruefung | gutachten  (steuern Assistenz-Regeln)
+   ============================================================ */
+const SPARTEN = {
+  'Gebäude': { wf:[
+    ['Auftrag prüfen & bestätigen',0],['Kontakt VN aufnehmen',1],['Ortstermin vereinbaren',2,'termin'],['Ortstermin durchführen',5],
+    ['Ursache feststellen (Leckage/Sturm/Brand)',7],['Sanierungsangebot prüfen',10,'pruefung'],['Gutachten erstellen',14,'gutachten'],
+    ['Rechnung prüfen',30,'pruefung'],['Honorar abrechnen',31],['Akte schließen',35]],
+    felder:[['schadenart','Schadenart','select',['Leitungswasser','Sturm','Hagel','Feuer','Elementar','Einbruch','Sonstige'],1],
+      ['baujahr','Baujahr','number'],['bauteile','Betroffene Bauteile / Räume','textarea'],['flaeche_m2','Betroffene Fläche (m²)','number'],
+      ['vs','Versicherungssumme (€)','eur'],['vw','Versicherungswert lt. SV (€)','eur'],['nfa','Abzug neu für alt (€)','eur']] },
+  'Hausrat': { wf:[
+    ['Auftrag prüfen & bestätigen',0],['Kontakt VN, Schaden-/Stehlgutliste anfordern',1],['Ortstermin vereinbaren',2,'termin'],
+    ['Ortstermin durchführen',5],['Schadenliste bewerten (Neuwert/Zeitwert)',10],['Unterversicherung prüfen',11],
+    ['Gutachten erstellen',14,'gutachten'],['Honorar abrechnen',15],['Akte schließen',20]],
+    felder:[['schadenart','Schadenart','select',['Einbruchdiebstahl','Leitungswasser','Feuer','Sturm/Hagel','Raub','Vandalismus','Sonstige'],1],
+      ['wohnflaeche_m2','Wohnfläche (m²)','number'],['polizei_az','Polizeiliches Aktenzeichen','text'],['schadenliste','Schaden-/Stehlgutliste','textarea'],
+      ['vs','Versicherungssumme (€)','eur'],['vw','Versicherungswert lt. SV (€)','eur']] },
+  'Inhalt': { wf:[
+    ['Auftrag prüfen & bestätigen',0],['Kontakt VN',1],['Ortstermin vereinbaren',2,'termin'],['Ortstermin durchführen',4],
+    ['Inventar, Bestandslisten & Anlagenverzeichnis anfordern',5],['Bewertung Einrichtung & Vorräte',12],['Restwerte / Verwertung klären',14],
+    ['Sanierungsangebot prüfen',14,'pruefung'],['Unterversicherung prüfen',15],['Gutachten erstellen',21,'gutachten'],['Honorar abrechnen',22],['Akte schließen',30]],
+    felder:[['betriebsart','Betriebsart','text',null,1],['einrichtung_wert','Schaden Betriebseinrichtung (€)','eur'],['vorraete_wert','Schaden Vorräte (€)','eur'],
+      ['restwert','Restwerte / Verwertungserlös (€)','eur'],['vs','Versicherungssumme (€)','eur'],['vw','Versicherungswert lt. SV (€)','eur']] },
+  'Betriebsunterbrechung': { wf:[
+    ['Auftrag prüfen & bestätigen',0],['Erstgespräch Geschäftsführung / Steuerberater',2],
+    ['Unterlagen anfordern (Jahresabschlüsse 3 J., BWA, Planung)',3],['Ortstermin vereinbaren',3,'termin'],['Ortstermin durchführen',5],
+    ['Schadenminderungsmaßnahmen abstimmen',7],['Zwischenberechnung / Abschlagszahlung',45],['Endabrechnung nach Haftzeit',380],
+    ['Gutachten erstellen',395,'gutachten'],['Honorar abrechnen',396],['Akte schließen',400]],
+    felder:[['unterbrechung_von','Unterbrechung ab','date',null,1],['haftzeit','Haftzeit (Monate)','number',null,1],
+      ['wiederanlauf','Wiederanlauf (voll) am','date'],['bedingungen','Bedingungswerk (z. B. FBUB)','text']] },
+  'Produkthaftpflicht': { wf:[
+    ['Auftrag & Deckungsrahmen prüfen',0],['Beteiligte erfassen (Anspruchsteller, Hersteller, Händler, Anwälte)',1],
+    ['Schadenstück sichern (Beweissicherung)',2],['Gemeinsamen Besichtigungstermin abstimmen',5,'termin'],['Gemeinsame Besichtigung',10],
+    ['Laboruntersuchung / Fachgutachten beauftragen',14],['Ursachenbericht',30],['Schadenhöhe Anspruchsteller prüfen',35,'pruefung'],
+    ['Gutachten erstellen',40,'gutachten'],['Honorar abrechnen',41],['Akte schließen',50]],
+    felder:[['produkt','Produkt / Typ / Charge','text',null,1],['hersteller','Hersteller','text',null,1],['fehlerart','Fehlerart','select',['Konstruktion','Fabrikation','Instruktion','Produktbeobachtung','unklar']],
+      ['anspruchsteller','Anspruchsteller','text'],['nutzung','Beschädigte Sache genutzt','select',['privat','gewerblich']],
+      ['kenntnis','Kenntnis Anspruchsteller (Schaden+Fehler+Hersteller)','date',null,1],['inverkehr','Inverkehrbringen des Produkts','date']] },
+  'Transport': { wf:[
+    ['Auftrag prüfen & bestätigen',0],['Besichtigung vereinbaren (Ware ggf. verderblich)',0,'termin'],
+    ['Frachtpapiere anfordern (Frachtbrief, Lieferschein, Packliste, Rechnung)',1],['Schadenvorbehalt / Rügefrist prüfen',1],['Besichtigung durchführen',2],
+    ['Schadenumfang, Restwert & Verwertung',5],['Haftung & Höchstbetrag Frachtführer',7],['Regressanzeige an Frachtführer',7],
+    ['Gutachten erstellen',14,'gutachten'],['Honorar abrechnen',15],['Akte schließen',20]],
+    felder:[['rechtsgrundlage','Rechtsgrundlage','select',['CMR','HGB (national)','CMNI (Binnenschiff int.)','Sonstige'],1],['frachtfuehrer','Frachtführer','text',null,1],
+      ['absender','Absender','text'],['empfaenger','Empfänger','text'],['relation','Relation (von – nach)','text'],['ware','Ware','text'],
+      ['ablieferung','Ablieferung am','date',null,1],['erkennbar','Schaden bei Ablieferung','select',['äußerlich erkennbar','nicht erkennbar']],
+      ['vorbehalt','Vorbehalt/Schadenanzeige erfolgt am','date'],['gewicht_kg','Rohgewicht beschädigter Teil (kg)','number'],
+      ['packstuecke','Anzahl beschädigter Packstücke','number'],['szr_kurs','Kurs € je SZR (Tageskurs)','number'],['restwert','Restwert (€)','eur']] },
+  'Marine (Binnenschiff)': { wf:[
+    ['Auftrag prüfen & bestätigen',0],['Schiffsdaten & aktuellen Liegeplatz klären',0],['Besichtigung vereinbaren',0,'termin'],
+    ['Besichtigung an Bord / Werft',1],['Schiffsführer befragen, Schiffstagebuch sichern',1],['Reparaturangebot Werft prüfen',5,'pruefung'],
+    ['Reparatur überwachen',20],['Werftrechnung prüfen',35,'pruefung'],['Havarie-grosse / Dispache prüfen',40],
+    ['Gutachten erstellen',45,'gutachten'],['Honorar abrechnen',46],['Akte schließen',60]],
+    felder:[['schiff','Schiffsname','text',null,1],['eni','ENI-Nummer','text',null,1],['schiffstyp','Schiffstyp','select',['GMS','TMS','SB/Schubverband','Fahrgastschiff','Sonstige']],
+      ['eigner','Eigner / Reederei','text'],['schiffsfuehrer','Schiffsführer','text'],['revier','Revier / Fluss-km','text'],
+      ['ereignis','Ereignis','select',['Kollision','Grundberührung','Anfahrung Brücke/Schleuse','Maschinenschaden','Ladungsschaden','Feuer','Sonstige'],1],
+      ['havarie_grosse','Havarie-grosse erklärt?','select',['nein','ja','prüfen']],['ausfalltage','Ausfalltage','number']] },
+};
+const BASIS_VOR = [['schadentag','Schadentag','date',null,1],['ursache','Schadenursache','textarea',null,1],['befund','Befund / Feststellungen','textarea',null,1]];
+const BASIS_NACH = [['deckung','Deckung gegeben?','select',['ja','nein','teilweise','offen'],1],['massnahmen','Empfohlene Maßnahmen','textarea'],
+  ['schadenhoehe_netto','Ermittelte Schadenhöhe netto (€)','eur',null,1],['regress','Regressmöglichkeit','select',['keine','prüfen','ja']],['fazit','Fazit','textarea',null,1]];
+const felder = a => [...BASIS_VOR, ...SPARTEN[a.sparte].felder, ...BASIS_NACH];
+
+const ROLLEN = ['VN','Auftraggeber (VR)','Makler','Anspruchsteller','Anwalt','Hersteller','Händler','Frachtführer','Absender','Empfänger',
+  'Reederei / Eigner','Schiffsführer','Werft','Handwerker / Sanierer','Steuerberater','Gegnerischer Versicherer','Polizei','Sonstige'];
+
+/* ============================================================
+   FRISTEN & BERECHNUNGEN je Sparte
+   ============================================================ */
+function fristen(a){
+  const g=a.gutachten, f=[];
+  if(a.sparte==='Transport' && g.ablieferung){
+    const rg=g.rechtsgrundlage||'';
+    if(g.erkennbar==='nicht erkennbar' && !g.vorbehalt){
+      if(rg==='CMR') f.push({t:'Schadenanzeige verdeckter Schaden an Frachtführer',d:addOhneSonntag(g.ablieferung,7),b:'Art. 30 Abs. 1 CMR: 7 Tage, Sonn- und Feiertage nicht mitgerechnet (Feiertage hier nicht berücksichtigt)'});
+      else if(rg.startsWith('CMNI')) f.push({t:'Schadenanzeige verdeckter Schaden',d:addDays(g.ablieferung,7),b:'Art. 23 CMNI: 7 aufeinanderfolgende Tage'});
+      else if(rg.startsWith('HGB')) f.push({t:'Schadenanzeige verdeckter Schaden',d:addDays(g.ablieferung,7),b:'§ 438 Abs. 2 HGB: 7 Tage'});
+    }
+    if(g.erkennbar==='äußerlich erkennbar' && !g.vorbehalt) f.push({t:'Kein Vorbehalt bei Ablieferung dokumentiert – Beweislage prüfen',d:g.ablieferung,b:'Art. 30 CMR / § 438 Abs. 1 HGB'});
+    f.push({t:'Verjährung Ansprüche gegen Frachtführer',d:addYears(g.ablieferung,1),b:'Art. 32 CMR / § 439 HGB / Art. 24 CMNI: 1 Jahr (bei Vorsatz/grobem Verschulden länger)'});
+  }
+  if(a.sparte==='Produkthaftpflicht'){
+    if(g.kenntnis){
+      f.push({t:'Verjährung nach ProdHaftG',d:addYears(g.kenntnis,3),b:'§ 12 ProdHaftG: 3 Jahre ab Kenntnis (Hemmung durch Verhandlungen möglich)'});
+      f.push({t:'Verjährung deliktisch (§ 823 BGB)',d:`${D(g.kenntnis).getUTCFullYear()+3}-12-31`,b:'§§ 195, 199 BGB: 3 Jahre zum Jahresende'});
+    }
+    if(g.inverkehr) f.push({t:'Erlöschen ProdHaftG-Ansprüche',d:addYears(g.inverkehr,10),b:'§ 13 ProdHaftG: 10 Jahre nach Inverkehrbringen'});
+  }
+  return f.sort((x,y)=>x.d.localeCompare(y.d));
+}
+function buMonate(a){
+  const g=a.gutachten, n=Math.min(36,+g.haftzeit||0); if(!g.unterbrechung_von||!n) return [];
+  a.bu=a.bu||{werte:[],varQuote:'',smk:''};
+  return Array.from({length:n},(_,i)=>{ a.bu.werte[i]=a.bu.werte[i]||{soll:'',ist:''};
+    return {i,von:addMonths(g.unterbrechung_von,i),bis:addDays(addMonths(g.unterbrechung_von,i+1),-1),...a.bu.werte[i]}; });
+}
+/* Liefert Ergebniszeilen [label, wert] und Hinweise – genutzt in UI und PDF */
+function berechnung(a){
+  const g=a.gutachten, rows=[], hints=[], S=num(g.schadenhoehe_netto);
+  if(['Gebäude','Hausrat','Inhalt'].includes(a.sparte)){
+    const vs=num(g.vs), vw=num(g.vw);
+    if(vs&&vw){ const q=Math.min(1,vs/vw);
+      rows.push(['Versicherungssumme',eur(vs)],['Versicherungswert lt. SV',eur(vw)],['Deckungsquote',(q*100).toFixed(1)+' %']);
+      if(S!=null) rows.push(['Entschädigung nach Proportionalitätsregel (§ 75 VVG)',eur(S*q)]);
+      if(q<1) hints.push('Unterversicherung festgestellt. Vertraglichen Unterversicherungsverzicht und die dafür geltenden Voraussetzungen prüfen.');
+    } else hints.push('Für die Unterversicherungsprüfung Versicherungssumme und Versicherungswert eintragen.');
+    if(a.sparte==='Inhalt'){ const e=num(g.einrichtung_wert)||0, v=num(g.vorraete_wert)||0, r=num(g.restwert)||0;
+      if(e||v) rows.push(['Einrichtung + Vorräte − Restwerte',eur(e+v-r)]); }
+  }
+  if(a.sparte==='Betriebsunterbrechung'){
+    const m=buMonate(a); let ausfall=0, offen=0;
+    m.forEach(x=>{ if(x.soll!==''&&x.ist!=='') ausfall+=Math.max(0,x.soll-x.ist); else if(x.bis<TODAY()) offen++; });
+    const vq=num(a.bu?.varQuote)||0, smk=num(a.bu?.smk)||0;
+    rows.push(['Umsatzausfall (Soll − Ist)',eur(ausfall)],[`abzgl. ersparte variable Kosten (${vq} %)`,eur(-ausfall*vq/100)],
+      ['zzgl. Schadenminderungskosten',eur(smk)],['Unterbrechungsschaden (vereinfacht)',eur(ausfall*(1-vq/100)+smk)]);
+    if(offen) hints.push(`${offen} abgelaufene Monat(e) ohne Ist-Umsatz.`);
+    hints.push('Vereinfachtes Umsatzverfahren. Maßgeblich sind die vereinbarten Bedingungen (fortlaufende Kosten + entgangener Betriebsgewinn, Haftzeit, Selbstbehalt).');
+  }
+  if(a.sparte==='Transport'){
+    const rg=g.rechtsgrundlage||'', kg=num(g.gewicht_kg), kurs=num(g.szr_kurs), pk=num(g.packstuecke);
+    let szr=null, basis='';
+    if((rg==='CMR'||rg.startsWith('HGB')) && kg){ szr=kg*8.33; basis=rg==='CMR'?'Art. 23 Abs. 3 CMR: 8,33 SZR/kg':'§ 431 Abs. 1 HGB: 8,33 SZR/kg'; }
+    if(rg.startsWith('CMNI') && (kg||pk)){ szr=Math.max((pk||0)*666.67,(kg||0)*2); basis='Art. 20 CMNI: 666,67 SZR/Packstück oder 2 SZR/kg (höherer Betrag)'; }
+    if(szr!=null){ rows.push(['Haftungshöchstbetrag',szr.toLocaleString('de-DE',{maximumFractionDigits:2})+' SZR']);
+      if(kurs){ const h=szr*kurs; rows.push(['Haftungshöchstbetrag in €',eur(h)]);
+        if(S!=null){ const r=num(g.restwert)||0; const sch=Math.max(0,S-r); rows.push(['Schaden abzgl. Restwert',eur(sch)],['Regressfähig (begrenzt)',eur(Math.min(sch,h))]);
+          if(sch>h) hints.push('Schaden übersteigt den Höchstbetrag. Qualifiziertes Verschulden prüfen (Art. 29 CMR / § 435 HGB), dann ist die Haftung unbegrenzt.'); } }
+      else hints.push('SZR-Tageskurs eintragen (maßgeblich ist der in der Rechtsgrundlage bestimmte Stichtag).');
+      hints.push(basis); if(rg.startsWith('HGB')) hints.push('§ 449 HGB: Abweichende Haftungshöhe (2–40 SZR/kg) durch AGB möglich, z. B. ADSp. Vertragsgrundlage anfordern.');
+    } else hints.push('Für den Höchstbetrag Rechtsgrundlage und Gewicht eintragen (bei CMNI auch die Packstücke).');
+  }
+  if(a.sparte==='Produkthaftpflicht'){
+    if(S!=null){ rows.push(['Sachschaden',eur(S)],['Selbstbeteiligung § 11 ProdHaftG',eur(-500)],['Ersatzfähig nach ProdHaftG',eur(Math.max(0,S-500))]); }
+    if(g.nutzung==='gewerblich') hints.push('Gewerblich genutzte Sache: Nach § 1 Abs. 1 S. 2 ProdHaftG kein Sachschadenersatz. Anspruch nur deliktisch (§ 823 BGB) oder vertraglich.');
+    if(g.inverkehr && g.inverkehr>='2026-12-09') hints.push('Produkt nach dem 09.12.2026 in Verkehr gebracht: neue Produkthaftungsrichtlinie (EU) 2024/2853 bzw. deren Umsetzung prüfen (u. a. Wegfall der Selbstbeteiligung).');
+  }
+  if(a.sparte==='Marine (Binnenschiff)'){
+    if(g.havarie_grosse==='ja') hints.push('Havarie-grosse erklärt: Dispacheur, Ladungsbeteiligte und Beitragswerte erfassen.');
+    hints.push('Haftungsbeschränkung des Schiffseigners prüfen (BinSchG / CLNI). Bei Kollision Verklarung und Beweissicherung prüfen.');
+    if(num(g.ausfalltage)) rows.push(['Ausfalltage',g.ausfalltage]);
+  }
+  return {rows,hints};
+}
+
+/* ============================================================
+   DEMO-DATEN
+   ============================================================ */
+function mkAkte(o){
+  const eingang=o.eingang||TODAY();
+  return {id:uid(),notizen:[],emails:[],termine:[],pruefungen:[],gutachten:{},beteiligte:[],erledigteAufgaben:[],status:'offen',
+    lat:null,lon:null,mail:'',tel:'',ereignis:uid(),...o,eingang,
+    workflow:SPARTEN[o.sparte].wf.map(([t,d,kind])=>({id:uid(),t,d,kind,done:false,faellig:addDays(eingang,d)}))};
+}
+function demo(){
+  const t=TODAY(); let nr=140; const az=()=>'SV-2026-'+String(nr++).padStart(4,'0');
+  const a1=mkAkte({az:az(),schadennr:'LW-883421',sparte:'Gebäude',auftraggeber:'Musterversicherung AG',vn:'Familie Becker',tel:'0221 555 1234',
+    mail:'becker@example.de',ort:'Venloer Str. 12, 50672 Köln',lat:50.943,lon:6.937,eingang:addDays(t,-6),beschreibung:'Wasseraustritt Küche EG, Feuchtigkeit in Wand zum Bad.'});
+  a1.workflow[0].done=a1.workflow[1].done=true; a1.gutachten={schadenart:'Leitungswasser',vs:'420000',vw:'510000',schadenhoehe_netto:'18400'};
+  const a2=mkAkte({az:az(),schadennr:'TR-24-7781',sparte:'Transport',auftraggeber:'Beispiel Transportversicherung',vn:'Elektro Handel Nord GmbH',
+    tel:'0203 444 220',mail:'logistik@ehn.example',ort:'Hafenstr. 20, 47119 Duisburg',lat:51.452,lon:6.733,eingang:addDays(t,-2),
+    beschreibung:'2 Paletten Schaltschränke, Gabelstaplerschaden, bei Entladung nicht erkannt.'});
+  a2.workflow[0].done=true;
+  a2.gutachten={rechtsgrundlage:'CMR',frachtfuehrer:'Spedition Weg & Co. Sp. z o.o.',relation:'Posen – Duisburg',ware:'Schaltschränke',
+    ablieferung:addDays(t,-4),erkennbar:'nicht erkennbar',gewicht_kg:'1240',packstuecke:'2',szr_kurs:'1.20',schadenhoehe_netto:'23800',restwert:'2500'};
+  a2.beteiligte.push({id:uid(),rolle:'Frachtführer',name:'Dispo',firma:'Spedition Weg & Co.',mail:'dispo@weg-spedition.example',tel:'',az:''});
+  a2.termine.push({id:uid(),datum:t,zeit:'14:00',art:'Besichtigung',ort:a2.ort,lat:a2.lat,lon:a2.lon});
+  const ev=uid();
+  const a3=mkAkte({az:az(),schadennr:'FE-2207',sparte:'Inhalt',auftraggeber:'Musterversicherung AG',vn:'Bäckerei Hansen',tel:'0228 333 999',
+    mail:'hansen@example.de',ort:'Markt 3, 53111 Bonn',lat:50.735,lon:7.101,eingang:addDays(t,-20),ereignis:ev,beschreibung:'Brand in Backstube, Ruß in Verkaufsraum.'});
+  a3.workflow.slice(0,5).forEach(s=>s.done=true); a3.gutachten={betriebsart:'Bäckerei mit Verkauf',vs:'150000',vw:'150000'};
+  a3.termine.push({id:uid(),datum:t,zeit:'10:00',art:'Nachbesichtigung',ort:a3.ort,lat:a3.lat,lon:a3.lon});
+  a3.pruefungen.push({id:uid(),typ:'Angebot',firma:'Sanierung Rhein GmbH',datum:addDays(t,-3),bemerkung:'',positionen:[
+    {text:'Rußreinigung Betriebseinrichtung',menge:85,einheit:'m²',ep:18.5,anerkannt_ep:16},{text:'Ozonbehandlung',menge:1,einheit:'psch',ep:1450,anerkannt_ep:1450},
+    {text:'Reinigung Kälteanlage',menge:1,einheit:'psch',ep:2100,anerkannt_ep:1600},{text:'Baustelleneinrichtung',menge:1,einheit:'psch',ep:950,anerkannt_ep:400}]});
+  const a4=mkAkte({az:az(),schadennr:'BU-2207',sparte:'Betriebsunterbrechung',auftraggeber:'Musterversicherung AG',vn:'Bäckerei Hansen',tel:'0228 333 999',
+    mail:'hansen@example.de',ort:'Markt 3, 53111 Bonn',lat:50.735,lon:7.101,eingang:addDays(t,-20),ereignis:ev,beschreibung:'Betriebsschließung nach Brand.'});
+  a4.workflow.slice(0,5).forEach(s=>s.done=true);
+  a4.gutachten={unterbrechung_von:addMonths(t,-3).slice(0,8)+'01',haftzeit:'12',bedingungen:'FBUB'};
+  a4.bu={varQuote:'35',smk:'4200',werte:[{soll:62000,ist:4000},{soll:58000,ist:21000},{soll:'',ist:''}]};
+  a4.beteiligte.push({id:uid(),rolle:'Steuerberater',name:'Hr. Brandt',firma:'Brandt StB',mail:'brandt@stb.example',tel:'0228 100 200',az:''});
+  const a5=mkAkte({az:az(),schadennr:'M-26-0419',sparte:'Marine (Binnenschiff)',auftraggeber:'Rhein Assekuranz',vn:'Reederei Kampmann',
+    tel:'0203 800 900',mail:'kampmann@reederei.example',ort:'Hafen Ruhrort, 47119 Duisburg',lat:51.455,lon:6.742,eingang:addDays(t,-1),
+    beschreibung:'GMS „Rheinfeld“ Anfahrung Schleuse, Bugschaden.'});
+  a5.gutachten={schiff:'Rheinfeld',eni:'04012345',schiffstyp:'GMS',ereignis:'Anfahrung Brücke/Schleuse',havarie_grosse:'nein'};
+  const a6=mkAkte({az:az(),schadennr:'PH-1180',sparte:'Produkthaftpflicht',auftraggeber:'Industrie-Haftpflicht AG',vn:'Haustechnik Werke GmbH',
+    tel:'0211 300 400',mail:'recht@htw.example',ort:'Gartenweg 5, 41460 Neuss',lat:51.198,lon:6.692,eingang:addDays(t,-12),
+    beschreibung:'Geplatzter Zulaufschlauch (Fabrikat VN) – Wasserschaden in Wohnung des Anspruchstellers.'});
+  a6.workflow.slice(0,3).forEach(s=>s.done=true);
+  a6.gutachten={produkt:'Aquastop-Schlauch AS-200, Charge 22-14',hersteller:'Haustechnik Werke GmbH',anspruchsteller:'Hr. Lorenz',nutzung:'privat',
+    kenntnis:addDays(addYears(t,-3),15),inverkehr:'2021-06-01',fehlerart:'unklar'};
+  a6.beteiligte.push({id:uid(),rolle:'Anspruchsteller',name:'Hr. Lorenz',firma:'',mail:'lorenz@example.de',tel:'02131 55 66',az:''},
+    {id:uid(),rolle:'Anwalt',name:'RA Dr. Seidel',firma:'Seidel Rechtsanwälte',mail:'seidel@ra.example',tel:'',az:'12/26 Lo'});
+  const inbox=[
+    {id:uid(),von:'schaden@musterversicherung.example',betreff:'Neuer Auftrag – Hausrat Einbruchdiebstahl',datum:t,anhaenge:['Schadenanzeige.pdf'],
+      text:'Sehr geehrte Damen und Herren,\nwir bitten um Begutachtung. Schaden-Nr. HR-55120, VN Fr. Meier, Lindenallee 7, 50968 Köln, Tel. 0221 123 456. Einbruchdiebstahl Hausrat, Stehlgutliste folgt.\nMit freundlichen Grüßen\nSchadenabteilung'},
+    {id:uid(),von:'becker@example.de',betreff:'Termin Wasserschaden',datum:t,anhaenge:[],text:'Hallo, wir können Donnerstag ab 9 Uhr. Grüße Becker'},
+    {id:uid(),von:'werft@hafenwerft.example',betreff:'Angebot Reparatur MS Rheinfeld',datum:t,anhaenge:['Angebot_4711.pdf'],
+      text:'Anbei unser Angebot für die Bugreparatur, ENI 04012345. Dockung ab KW 47 möglich.'},
+    {id:uid(),von:'seidel@ra.example',betreff:'Ihr Zeichen PH-1180 – Fristverlängerung',datum:addDays(t,-1),anhaenge:[],
+      text:'Wir bitten um Stellungnahme zur Haftung bis Monatsende und erklären uns mit Verhandlungen einverstanden.'},
+  ];
+  return {akten:[a1,a2,a3,a4,a5,a6],inbox,nextNr:nr};
+}
+const KEY='schadenakte_v2';
+let DB; try{DB=JSON.parse(localStorage.getItem(KEY))}catch(e){}
+if(!DB) DB=demo();
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(DB))}catch(e){}};
+function resetDemo(){ if(confirm('Alle Daten auf Demo zurücksetzen?')){DB=demo();save();go('assistenz');} }
+const A=id=>DB.akten.find(x=>x.id===id);
+function log(a,text,typ='system'){ a.notizen.unshift({id:uid(),datum:TODAY(),typ,text}); }
+
+/* ============================================================
+   ASSISTENZ-ENGINE – erzeugt Aufgaben aus dem Zustand der Akten.
+   Jede Regel hat einen stabilen Schlüssel → „Erledigt“ ist dauerhaft.
    ============================================================ */
 function aufgaben(){
-  const out=[]; const t=TODAY();
-  const push=(akte,key,text,faellig,prio,aktion)=>{
-    if(akte && akte.erledigteAufgaben.includes(key)) return;
-    out.push({akte,key,text,faellig,prio,aktion});
-  };
+  const out=[], t=TODAY();
+  const push=(a,key,text,faellig,prio,aktion)=>{ if(a&&a.erledigteAufgaben.includes(key)) return; out.push({akte:a,key,text,faellig,prio,aktion}); };
   for(const a of DB.akten.filter(a=>a.status!=='abgeschlossen')){
-    // 1) Nächster offener Workflow-Schritt
+    const g=a.gutachten;
+    if(a.quelleMail && !a.bestaetigt) push(a,'best','Auftragsbestätigung an Auftraggeber senden (Entwurf liegt bereit)',t,2,{typ:'best'});
     const next=a.workflow.find(s=>!s.done);
-    if(next){
-      const diff=daysBetween(t,next.faellig);
-      push(a,'wf:'+next.id,next.t,next.faellig,diff<0?3:diff<=1?2:1,{typ:'wf',id:next.id});
-    }
-    // 2) Termin nötig, aber keiner geplant
-    const terminSchritt=a.workflow.find(s=>s.kind==='termin');
-    if(terminSchritt && !terminSchritt.done && a.termine.length===0 && daysBetween(a.eingang,t)>=1)
-      push(a,'kein-termin','Noch kein Ortstermin geplant – VN anrufen: '+a.tel,t,3,{typ:'tab',tab:'termine'});
-    // 3) Termin morgen → Vorbereitung
+    if(next){ const d=daysBetween(t,next.faellig); push(a,'wf:'+next.id,next.t,next.faellig,d<0?3:d<=1?2:1,{typ:'wf',id:next.id}); }
+    const ts=a.workflow.find(s=>s.kind==='termin');
+    if(ts && !ts.done && !a.termine.length) push(a,'kein-termin',`Noch kein Termin geplant – ${a.tel?'anrufen: '+a.tel:'Kontaktdaten fehlen'}`,t,a.workflow.indexOf(ts)<=2?3:2,{typ:'tab',tab:'termine'});
     for(const tm of a.termine){
-      if(tm.datum===addDays(t,1)) push(a,'vorb:'+tm.id,`Termin morgen ${tm.zeit} vorbereiten (Unterlagen, Messgeräte)`,t,2,{typ:'tab',tab:'termine'});
-      if(tm.datum<t && !tm.protokoll) push(a,'prot:'+tm.id,`Protokoll für Termin vom ${fmt(tm.datum)} fehlt`,t,2,{typ:'tab',tab:'gutachten'});
+      if(tm.datum===addDays(t,1)) push(a,'vorb:'+tm.id,`Termin morgen ${tm.zeit} vorbereiten`,t,2,{typ:'tab',tab:'termine'});
+      if(tm.datum<t && !tm.protokoll) push(a,'prot:'+tm.id,`Protokoll für Termin vom ${fmt(tm.datum)} fehlt`,t,2,{typ:'tab',tab:'termine'});
     }
-    // 4) Zugeordnete, ungelesene E-Mails
-    for(const m of a.emails.filter(m=>!m.erledigt))
-      push(a,'mail:'+m.id,'E-Mail bearbeiten: '+m.betreff,m.datum,2,{typ:'tab',tab:'kommunikation'});
-    // 5) Prüfungen ohne Bericht
-    for(const p of a.pruefungen.filter(p=>!p.versendet))
-      push(a,'pr:'+p.id,`${p.typ}sprüfung ${p.firma} abschließen und versenden`,addDays(p.datum,5),2,{typ:'tab',tab:'pruefung'});
-    // 6) Gutachten-Pflichtfelder unvollständig, obwohl Gutachten-Schritt ansteht
+    for(const m of a.emails.filter(m=>!m.erledigt)) push(a,'mail:'+m.id,'E-Mail bearbeiten: '+m.betreff,m.datum,2,{typ:'tab',tab:'kommunikation'});
+    for(const p of a.pruefungen.filter(p=>!p.versendet)) push(a,'pr:'+p.id,`${p.typ}sprüfung ${p.firma} abschließen und versenden`,addDays(p.datum,5),2,{typ:'tab',tab:'pruefung'});
+    for(const f of fristen(a)){ const d=daysBetween(t,f.d); if(d<=30) push(a,'fr:'+f.t+f.d,`Frist: ${f.t} – ${fmt(f.d)}${d<0?' (abgelaufen!)':` (in ${d} Tagen)`}`,f.d,d<=7?3:2,{typ:'tab',tab:'berechnung'}); }
     const gs=a.workflow.find(s=>s.kind==='gutachten'&&!s.done);
-    if(gs && daysBetween(t,gs.faellig)<=3){
-      const fehlt=['ursache','befund','deckung','schadenhoehe_netto','fazit'].filter(k=>!a.gutachten[k]);
-      if(fehlt.length) push(a,'gf:'+fehlt.join(),`Gutachten: ${fehlt.length} Pflichtfelder offen (${fehlt.join(', ')})`,gs.faellig,2,{typ:'tab',tab:'gutachten'});
-    }
-    // 7) Keine Aktivität seit 7 Tagen
+    if(gs && daysBetween(t,gs.faellig)<=3){ const fehlt=felder(a).filter(f=>f[4]&&!g[f[0]]).map(f=>f[1]);
+      if(fehlt.length) push(a,'gf:'+fehlt.length,`Gutachten: ${fehlt.length} Pflichtfelder offen (${fehlt.join(', ')})`,gs.faellig,2,{typ:'tab',tab:'gutachten'}); }
+    const vs=num(g.vs), vw=num(g.vw);
+    if(vs&&vw&&vs<vw) push(a,'uv',`Unterversicherung ${Math.round(100*vs/vw)} % – im Gutachten begründen, Verzicht prüfen`,t,1,{typ:'tab',tab:'berechnung'});
+    if(a.sparte==='Transport' && !g.rechtsgrundlage) push(a,'rg','Rechtsgrundlage (CMR/HGB/CMNI) festlegen – davon hängen Fristen und Höchstbetrag ab',t,3,{typ:'tab',tab:'gutachten'});
+    if(a.sparte==='Betriebsunterbrechung'){ const off=buMonate(a).filter(x=>x.bis<t&&x.ist==='').length;
+      if(off) push(a,'bu:'+off,`Ist-Umsätze für ${off} abgelaufene Monat(e) beim VN/Steuerberater anfordern`,t,2,{typ:'tab',tab:'berechnung'}); }
+    if(a.sparte==='Produkthaftpflicht' && !a.beteiligte.some(b=>b.rolle==='Anspruchsteller')) push(a,'anspr','Anspruchsteller als Beteiligten erfassen',t,2,{typ:'tab',tab:'beteiligte'});
     const last=[a.eingang,...a.notizen.map(n=>n.datum),...a.emails.map(m=>m.datum),...a.termine.map(x=>x.datum)].sort().pop();
-    if(daysBetween(last,t)>=7) push(a,'ruhe:'+last,`Seit ${daysBetween(last,t)} Tagen keine Aktivität – Sachstand an ${a.sachbearbeiter} melden`,t,1,{typ:'tab',tab:'kommunikation'});
+    if(daysBetween(last,t)>=7) push(a,'ruhe:'+last,`Seit ${daysBetween(last,t)} Tagen keine Aktivität – Sachstand an Auftraggeber melden`,t,1,{typ:'tab',tab:'kommunikation'});
   }
-  // 8) Nicht zugeordnete E-Mails im Posteingang
   const offen=DB.inbox.filter(m=>!m.zugeordnet).length;
   if(offen) out.push({akte:null,key:'inbox',text:`${offen} E-Mail(s) im Posteingang nicht zugeordnet`,faellig:t,prio:2,aktion:{typ:'view',view:'posteingang'}});
   return out.sort((x,y)=>y.prio-x.prio||x.faellig.localeCompare(y.faellig));
 }
-function aufgabeErledigt(aktenId,key,wfId){
-  const a=DB.akten.find(a=>a.id===aktenId);
+function aufgabeErledigt(id,key,wfId){
+  const a=A(id);
   if(wfId){ const s=a.workflow.find(s=>s.id===wfId); s.done=true; log(a,'Workflow: „'+s.t+'“ erledigt'); }
   else a.erledigteAufgaben.push(key);
   save(); render();
 }
+function bestaetigen(id){
+  const a=A(id); a.bestaetigt=true; log(a,'Auftragsbestätigung versendet'); save(); render();
+  location.href=mailto(a.auftraggeberMail||'',`Auftragsbestätigung ${a.schadennr} – Ihr Auftrag vom ${fmt(a.eingang)}`,
+    `Sehr geehrte Damen und Herren,\n\nvielen Dank für Ihren Auftrag zu Schaden-Nr. ${a.schadennr} (VN ${a.vn}). Wir führen den Vorgang unter unserem Aktenzeichen ${a.az} und nehmen kurzfristig Kontakt mit dem VN auf.\n\nMit freundlichen Grüßen`);
+}
+const mailto=(to,subj,body)=>`mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(body||'')}`;
 
-/* ---------- E-Mail-Zuordnung ----------
-   Erkennt Aktenzeichen, Schadennummer oder Absenderadresse. */
-function erkenneAkte(m){
-  const txt=(m.betreff+' '+m.text).toUpperCase();
-  return DB.akten.find(a=>txt.includes(a.az.toUpperCase())||txt.includes(a.schadennr.toUpperCase())||m.von.toLowerCase()===a.mail.toLowerCase());
+/* ============================================================
+   E-MAIL: Import (.eml), Erkennung, Zuordnung
+   ============================================================ */
+const bytesOf = s => Uint8Array.from(s,c=>c.charCodeAt(0)&255);
+const dec = (bin,cs) => { try{ return new TextDecoder(cs||'utf-8').decode(bytesOf(bin)); }catch(e){ return bin; } };
+const qp = s => s.replace(/=\r?\n/g,'').replace(/=([0-9A-F]{2})/gi,(_,h)=>String.fromCharCode(parseInt(h,16)));
+const words = s => (s||'').replace(/(\?=)\s+(=\?)/g,'$1$2').replace(/=\?([^?]+)\?([BQ])\?([^?]*)\?=/gi,(_,cs,e,t)=>
+  dec(e.toUpperCase()==='B'?atob(t):qp(t.replace(/_/g,' ')),cs));
+const param = (v,n) => { const m=(v||'').match(new RegExp(n+'\\*?=\\s*"?([^";\\r\\n]+)"?','i')); if(!m) return '';
+  const r=m[1].match(/^([\w-]+)'[^']*'(.*)$/); if(r){ try{ return decodeURIComponent(r[2]); }catch(e){ return r[2]; } } return m[1]; };
+function parsePart(s,out){
+  const i=s.search(/\r?\n\r?\n/), h=i<0?s:s.slice(0,i), b=i<0?'':s.slice(i).replace(/^\r?\n\r?\n/,'');
+  const H={}; h.replace(/\r?\n[ \t]+/g,' ').split(/\r?\n/).forEach(l=>{const k=l.indexOf(':'); if(k>0){const n=l.slice(0,k).trim().toLowerCase(); if(!(n in H)) H[n]=l.slice(k+1).trim();}});
+  if(!out.H) out.H=H;
+  const ct=H['content-type']||'text/plain', enc=(H['content-transfer-encoding']||'').toLowerCase(), cs=param(ct,'charset')||'utf-8';
+  if(/multipart\//i.test(ct)){ const bd=param(ct,'boundary'); b.split('--'+bd).slice(1).forEach(p=>{ if(!p.startsWith('--')) parsePart(p.replace(/^\r?\n/,''),out); }); return; }
+  const disp=H['content-disposition']||'', fn=words(dec(param(disp,'filename')||param(ct,'name'),'utf-8'));
+  if(fn||/attachment/i.test(disp)){ out.anhaenge.push(fn||'Anhang'); return; }
+  const body = enc==='base64' ? atob(b.replace(/\s+/g,'')) : enc==='quoted-printable' ? qp(b) : b;
+  if(/text\/plain/i.test(ct) && !out.text) out.text=dec(body,cs);
+  else if(/text\/html/i.test(ct) && !out.html) out.html=dec(body,cs);
 }
-function istNeuerAuftrag(m){ return /neuer auftrag|beauftrag|bitte übernehmen/i.test(m.betreff+' '+m.text); }
+function parseEml(bytes){
+  const raw=new TextDecoder('latin1').decode(bytes), out={anhaenge:[]}; parsePart(raw,out);
+  let text=out.text;
+  if(!text && out.html){ const d=new DOMParser().parseFromString(out.html.replace(/<br\s*\/?>|<\/p>|<\/div>/gi,'\n'),'text/html'); text=d.body.textContent; }
+  const H=out.H||{}, from=words(dec(H.from||'','utf-8')), dt=new Date(H.date);
+  return {von:((from.match(/<([^>]+)>/)||[])[1]||from).trim(),betreff:words(dec(H.subject||'(ohne Betreff)','utf-8')),
+    datum:isNaN(dt)?TODAY():iso(dt),text:(text||'').replace(/\n{3,}/g,'\n\n').trim(),anhaenge:out.anhaenge};
+}
+async function importEml(files){
+  let n=0;
+  for(const f of files){
+    if(/\.msg$/i.test(f.name)){ alert(f.name+': Outlook-.msg wird im Prototyp nicht gelesen. In Outlook bitte „Speichern unter → .eml“ verwenden oder die Mail weiterleiten.'); continue; }
+    try{ const m=parseEml(new Uint8Array(await f.arrayBuffer())); empfangen(m); n++; }catch(e){ alert(f.name+': konnte nicht gelesen werden ('+e.message+')'); }
+  }
+  if(n){ save(); render(); }
+}
+function empfangen(m){
+  m={id:uid(),zugeordnet:null,anhaenge:[],...m}; DB.inbox.unshift(m);
+  const a=erkenneAkte(m); if(a && !istNeuerAuftrag(m)) zuordnen(m.id,a.id,true);
+}
+/* Zuordnung: Aktenzeichen, Schaden-Nr., Schiffsname/ENI, Absender = VN oder Beteiligter */
+function treffer(a,m){
+  const txt=(m.betreff+' '+m.text).toUpperCase(), von=(m.von||'').toLowerCase();
+  const keys=[a.az,a.schadennr,a.gutachten.eni,a.gutachten.schiff,...a.beteiligte.map(b=>b.az)].filter(k=>k&&String(k).length>=4);
+  for(const k of keys) if(txt.includes(String(k).toUpperCase())) return 'Kennung „'+k+'“';
+  if(a.mail && von===a.mail.toLowerCase()) return 'Absender = VN';
+  const b=a.beteiligte.find(b=>b.mail&&b.mail.toLowerCase()===von); if(b) return 'Absender = '+b.rolle;
+  return null;
+}
+function erkenneAkte(m){ return DB.akten.find(a=>a.status!=='abgeschlossen'&&treffer(a,m)) || DB.akten.find(a=>treffer(a,m)); }
+function istNeuerAuftrag(m){ return /neuer auftrag|beauftrag|bitte übernehmen|bitten um (begutachtung|besichtigung)|gutachtenauftrag|mit der begutachtung/i.test(m.betreff+' '+m.text); }
+const SPARTE_WORTE = {
+  'Marine (Binnenschiff)':/binnenschiff|\bgms\b|\btms\b|\bms\s|schleuse|werft|havarie|\beni\b|rhein-km|fluss-km|schubverband|reederei/gi,
+  'Transport':/transport|\bcmr\b|frachtf(ü|ue)hrer|spedition|frachtbrief|sendung|palette|lkw|ladungsschaden|ablieferung/gi,
+  'Produkthaftpflicht':/produkthaft|prodhaftg|produktfehler|r(ü|ue)ckruf|hersteller|anspruchsteller|fabrikationsfehler/gi,
+  'Betriebsunterbrechung':/betriebsunterbrechung|\bbu\b|ertragsausfall|unterbrechungsschaden|betriebsausfall|fbub/gi,
+  'Inhalt':/inhalt|betriebseinrichtung|warenvorrat|vorr(ä|ae)te|inventar|gesch(ä|ae)ftsinhalt/gi,
+  'Hausrat':/hausrat|einbruch|diebstahl|stehlgut|wohnungsinhalt|schmuck/gi,
+  'Gebäude':/geb(ä|ae)ude|leitungswasser|rohrbruch|sturm|hagel|dach|fassade|feuchtigkeit|mauerwerk/gi,
+};
+function erkenneSparte(text){
+  let best='Gebäude', max=0;
+  for(const [s,re] of Object.entries(SPARTE_WORTE)){ const n=(text.match(re)||[]).length; if(n>max){max=n;best=s;} }
+  return best;
+}
 function extrahiereAuftrag(m){
-  const g=(re)=>{const x=(m.text.match(re)||[])[1];return x?x.trim():''};
-  const sparteRaw=/leitungswasser/i.test(m.text)?'Leitungswasser':/sturm|hagel/i.test(m.text)?'Sturm/Hagel':/brand|feuer/i.test(m.text)?'Feuer':/kfz|fahrzeug|unfall/i.test(m.text)?'Kfz':'Leitungswasser';
-  return {schadennr:g(/Schaden\s+([A-Z]{1,3}-\d+)/i),vn:g(/VN\s+([^,]+)/),ort:g(/VN\s+[^,]+,\s*([^,]+,\s*\d{5}\s+[^\s.,]+)/),
-    tel:g(/Tel\.?\s*([\d\s\/]+)/),sparte:sparteRaw,auftraggeber:m.von.split('@')[1]||'',beschreibung:m.text.split('\n').slice(1,3).join(' ')};
+  const T=m.text, g=re=>{ const x=(T.match(re)||[])[1]; return x?x.trim().replace(/[.,;]$/,''):''; };
+  const adr=T.match(/([A-ZÄÖÜ][A-Za-zÄÖÜäöüß.\- ]*?(?:str\.|straße|strasse|weg|platz|allee|ring|gasse|damm|ufer|hafen|markt)[A-Za-zÄÖÜäöüß.\- ]*\s\d+\s?[a-z]?),?\s*(\d{5})\s+([A-ZÄÖÜ][A-Za-zÄÖÜäöüß\-]+(?:\s[A-ZÄÖÜ][a-zäöüß]+)?)/);
+  return {
+    schadennr:g(/Schaden(?:-?n(?:r|ummer)\.?)?\s*[:#]?\s*([A-Z]{1,4}[-\/]?\d[\w\-\/]{2,})/i),
+    vsnr:g(/(?:VS-?Nr\.?|Versicherungsschein(?:-?nr\.?|nummer)?)\s*[:#]?\s*([\w\-\/.]{4,})/i),
+    vn:g(/(?:VN|Versicherungsnehmer(?:in)?)\s*:?\s*([^,\n]+)/i),
+    tel:g(/(?:Tel\.?|Telefon|Mobil)\s*[:.]?\s*(\+?\d[\d\s\/\-]{5,}\d)/i),
+    ort:adr?`${adr[1].trim()}, ${adr[2]} ${adr[3]}`:'',
+    sparte:erkenneSparte(m.betreff+' '+T), auftraggeber:(m.von.split('@')[1]||'').replace(/\.\w+$/,''), auftraggeberMail:m.von,
+    beschreibung:T.split('\n').filter(l=>l.trim()).slice(1,3).join(' ').slice(0,300),
+  };
 }
-function zuordnen(mailId,aktenId){
-  const m=DB.inbox.find(x=>x.id===mailId), a=DB.akten.find(x=>x.id===aktenId);
-  m.zugeordnet=a.az; a.emails.push({...m,erledigt:false}); log(a,'E-Mail zugeordnet: '+m.betreff);
-  save(); render();
+function zuordnen(mailId,id,still){
+  const m=DB.inbox.find(x=>x.id===mailId), a=A(id);
+  m.zugeordnet=a.az; a.emails.push({...m,erledigt:false}); log(a,'E-Mail zugeordnet: '+m.betreff,'mail');
+  if(!still){ save(); render(); }
 }
 function akteAusMail(mailId){
-  const m=DB.inbox.find(x=>x.id===mailId); const d=extrahiereAuftrag(m);
-  const a=neueAkte({...d,mail:'',lat:null,lon:null,sachbearbeiter:m.von});
-  zuordnen(mailId,a.id); openAkte(a.id);
+  const m=DB.inbox.find(x=>x.id===mailId), d=extrahiereAuftrag(m);
+  const a=neueAkte({...d,quelleMail:true}); zuordnen(mailId,a.id,true); save(); openAkte(a.id);
 }
 function neueAkte(d){
-  const sparte=d.sparte||'Leitungswasser', eingang=TODAY();
-  const a={id:uid(),az:'SV-2026-'+String(DB.nextNr++).padStart(4,'0'),schadennr:d.schadennr||'',sparte,auftraggeber:d.auftraggeber||'',
-    sachbearbeiter:d.sachbearbeiter||'',vn:d.vn||'',tel:d.tel||'',mail:d.mail||'',ort:d.ort||'',lat:d.lat??null,lon:d.lon??null,eingang,
-    beschreibung:d.beschreibung||'',status:'offen',notizen:[],emails:[],termine:[],pruefungen:[],gutachten:{},erledigteAufgaben:[],
-    workflow:SPARTEN[sparte].map(s=>({...s,id:uid(),done:false,faellig:addDays(eingang,s.d)}))};
-  DB.akten.unshift(a); log(a,'Akte angelegt'); save(); return a;
+  const a=mkAkte({...d,sparte:SPARTEN[d.sparte]?d.sparte:'Gebäude',az:'SV-2026-'+String(DB.nextNr++).padStart(4,'0')});
+  DB.akten.unshift(a); log(a,'Akte angelegt'+(d.quelleMail?' aus E-Mail':'')); save(); return a;
 }
-function log(a,text){ a.notizen.unshift({id:uid(),datum:TODAY(),typ:'system',text}); }
-const fmt=d=>d?new Date(d).toLocaleDateString('de-DE'):'';
-
-/* ---------- Routenplanung ----------
-   Nächster-Nachbar-Heuristik ab Büro; Ausgabe als Google-Maps-Route. */
-const BUERO={name:'Büro',lat:50.9375,lon:6.9603,ort:'Köln Innenstadt'};
-function dist(a,b){const R=6371,r=Math.PI/180,dLat=(b.lat-a.lat)*r,dLon=(b.lon-a.lon)*r;
-  const h=Math.sin(dLat/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
-function route(stops){
-  const rest=stops.filter(s=>s.lat!=null), order=[]; let cur=BUERO, km=0;
-  while(rest.length){ rest.sort((x,y)=>dist(cur,x)-dist(cur,y)); const n=rest.shift(); km+=dist(cur,n); order.push(n); cur=n; }
-  km+=order.length?dist(cur,BUERO):0;
-  return {order,km:km*1.3}; // Faktor 1,3: Luftlinie → Straße (grobe Schätzung)
+function verknuepfteAkte(id){
+  const a=A(id), s=prompt('Weitere Sparte zum selben Schadenereignis ('+Object.keys(SPARTEN).filter(x=>x!==a.sparte).join(', ')+'):');
+  if(!s) return; if(!SPARTEN[s]) return alert('Unbekannte Sparte');
+  const n=neueAkte({sparte:s,schadennr:'',auftraggeber:a.auftraggeber,vn:a.vn,tel:a.tel,mail:a.mail,ort:a.ort,lat:a.lat,lon:a.lon,beschreibung:a.beschreibung});
+  n.ereignis=a.ereignis; n.beteiligte=JSON.parse(JSON.stringify(a.beteiligte)); n.gutachten.schadentag=a.gutachten.schadentag||'';
+  log(a,'Verknüpfte Akte '+n.az+' ('+s+') angelegt'); save(); openAkte(n.id);
 }
 
 /* ============================================================
-   PDF-ERZEUGUNG
+   ROUTENPLANUNG – Nächster Nachbar ab Büro, Übergabe an Google Maps
    ============================================================ */
+const BUERO={lat:50.9375,lon:6.9603,ort:'Köln'};
+function dist(a,b){const R=6371,r=Math.PI/180,dLat=(b.lat-a.lat)*r,dLon=(b.lon-a.lon)*r;
+  const h=Math.sin(dLat/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
+function route(stops){
+  const rest=stops.filter(s=>s.lat!=null&&s.lon!=null), order=[]; let cur=BUERO, km=0;
+  while(rest.length){ rest.sort((x,y)=>dist(cur,x)-dist(cur,y)); const n=rest.shift(); km+=dist(cur,n); order.push(n); cur=n; }
+  if(order.length) km+=dist(cur,BUERO);
+  return {order,km:km*1.3,ohne:stops.filter(s=>s.lat==null||s.lon==null)};
+}
+
+/* ============================================================
+   PDF
+   ============================================================ */
+function jspdfOk(){ if(!window.jspdf){ alert('PDF-Bibliothek nicht geladen (Internetverbindung nötig).'); return null; } return new window.jspdf.jsPDF(); }
 function pdfKopf(doc,titel,a){
   doc.setFontSize(16);doc.text(titel,14,18);doc.setFontSize(9);
-  doc.text(`Aktenzeichen ${a.az}  ·  Schaden-Nr. ${a.schadennr}  ·  ${a.sparte}`,14,25);
-  doc.text(`Auftraggeber: ${a.auftraggeber} (${a.sachbearbeiter})  ·  VN: ${a.vn}`,14,30);
-  doc.text(`Risikoort: ${a.ort}  ·  Erstellt: ${fmt(TODAY())}`,14,35);
+  doc.text(`Aktenzeichen ${a.az}  ·  Schaden-Nr. ${a.schadennr||'—'}  ·  Sparte ${a.sparte}`,14,25);
+  doc.text(`Auftraggeber: ${a.auftraggeber||'—'}  ·  VN: ${a.vn||'—'}`,14,30);
+  doc.text(`Risikoort: ${a.ort||'—'}  ·  Erstellt: ${fmt(TODAY())}`,14,35);
 }
+const fv=(f,v)=>!v?'—':f[2]==='date'?fmt(v):f[2]==='eur'?eur(v):String(v);
 function pdfGutachten(a){
-  const {jsPDF}=window.jspdf; if(!jsPDF) return alert('PDF-Bibliothek nicht geladen (offline?)');
-  const doc=new jsPDF(); pdfKopf(doc,'Gutachten',a);
-  doc.autoTable({startY:42,head:[['Feld','Inhalt']],columnStyles:{0:{cellWidth:55,fontStyle:'bold'}},
-    body:GUTACHTEN_FELDER.map(([k,l,typ])=>[l,typ==='date'?fmt(a.gutachten[k]):(typ==='number'&&k.includes('hoehe')||k.includes('abzug'))&&a.gutachten[k]?eur(a.gutachten[k]):a.gutachten[k]||'—'])});
-  if(a.termine.length){ doc.autoTable({startY:doc.lastAutoTable.finalY+8,head:[['Termin','Art','Protokoll']],
-    body:a.termine.map(t=>[fmt(t.datum)+' '+t.zeit,t.art,t.protokoll||'—'])}); }
-  doc.save(`${a.az}_Gutachten.pdf`); log(a,'Gutachten-PDF erstellt'); save();
-}
-function pdfPruefung(a,p){
-  const {jsPDF}=window.jspdf; if(!jsPDF) return alert('PDF-Bibliothek nicht geladen (offline?)');
-  const doc=new jsPDF(); pdfKopf(doc,p.typ+'sprüfung',a);
-  doc.setFontSize(10);doc.text(`${p.typ} ${p.firma} vom ${fmt(p.datum)}`,14,43);
-  const s=summen(p);
-  doc.autoTable({startY:48,head:[['Position','Menge','EP gefordert','EP anerkannt','GP gefordert','GP anerkannt','Kürzung']],
-    body:p.positionen.map(x=>[x.text,x.menge+' '+x.einheit,eur(x.ep),eur(x.anerkannt_ep),eur(x.menge*x.ep),eur(x.menge*x.anerkannt_ep),eur(x.menge*(x.ep-x.anerkannt_ep))]),
-    foot:[['Summe netto','','','',eur(s.gef),eur(s.anr),eur(s.gef-s.anr)]],styles:{fontSize:8}});
-  if(p.bemerkung){doc.setFontSize(9);doc.text(doc.splitTextToSize('Bemerkung: '+p.bemerkung,180),14,doc.lastAutoTable.finalY+8);}
-  doc.save(`${a.az}_${p.typ}spruefung_${p.firma.replace(/\W+/g,'_')}.pdf`);
-  p.versendet=true; log(a,`${p.typ}sprüfung ${p.firma} als PDF erstellt`); save(); render();
+  const doc=jspdfOk(); if(!doc) return; pdfKopf(doc,'Gutachten',a);
+  doc.autoTable({startY:42,head:[['Feld','Inhalt']],columnStyles:{0:{cellWidth:60,fontStyle:'bold'}},body:felder(a).map(f=>[f[1],fv(f,a.gutachten[f[0]])])});
+  const y=()=>doc.lastAutoTable.finalY+8, B=berechnung(a), F=fristen(a);
+  if(B.rows.length) doc.autoTable({startY:y(),head:[['Berechnung','']],body:B.rows,columnStyles:{1:{halign:'right'}}});
+  if(B.hints.length) doc.autoTable({startY:y(),head:[['Hinweise']],body:B.hints.map(h=>[h])});
+  if(F.length) doc.autoTable({startY:y(),head:[['Frist','Datum','Grundlage']],body:F.map(f=>[f.t,fmt(f.d),f.b])});
+  if(a.beteiligte.length) doc.autoTable({startY:y(),head:[['Rolle','Name','Firma','Zeichen']],body:a.beteiligte.map(b=>[b.rolle,b.name,b.firma,b.az])});
+  if(a.termine.length) doc.autoTable({startY:y(),head:[['Termin','Art','Protokoll']],body:a.termine.map(t=>[fmt(t.datum)+' '+t.zeit,t.art,t.protokoll||'—'])});
+  doc.save(`${a.az}_Gutachten.pdf`); log(a,'Gutachten-PDF erstellt'); save(); render();
 }
 const summen=p=>({gef:p.positionen.reduce((s,x)=>s+x.menge*x.ep,0),anr:p.positionen.reduce((s,x)=>s+x.menge*x.anerkannt_ep,0)});
+function pdfPruefung(a,p){
+  const doc=jspdfOk(); if(!doc) return; pdfKopf(doc,p.typ+'sprüfung',a);
+  doc.setFontSize(10);doc.text(`${p.typ} ${p.firma} vom ${fmt(p.datum)}`,14,43);
+  const s=summen(p);
+  doc.autoTable({startY:48,head:[['Position','Menge','EP gefordert','EP anerkannt','GP gefordert','GP anerkannt','Kürzung']],styles:{fontSize:8},
+    body:p.positionen.map(x=>[x.text,x.menge+' '+x.einheit,eur(x.ep),eur(x.anerkannt_ep),eur(x.menge*x.ep),eur(x.menge*x.anerkannt_ep),eur(x.menge*(x.ep-x.anerkannt_ep))]),
+    foot:[['Summe netto','','','',eur(s.gef),eur(s.anr),eur(s.gef-s.anr)]]});
+  if(p.bemerkung){doc.setFontSize(9);doc.text(doc.splitTextToSize('Bemerkung: '+p.bemerkung,180),14,doc.lastAutoTable.finalY+8);}
+  doc.save(`${a.az}_${p.typ}spruefung.pdf`); p.versendet=true; log(a,`${p.typ}sprüfung ${p.firma} als PDF erstellt`); save(); render();
+}
 
 /* ============================================================
    UI
    ============================================================ */
-let VIEW='assistenz', AKTE=null, TAB='uebersicht';
-const VIEWS=[['assistenz','Assistenz'],['akten','Akten'],['posteingang','Posteingang'],['termine','Termine & Route'],['workflows','Workflows']];
-function go(v){VIEW=v;AKTE=null;render();}
-function openAkte(id,tab='uebersicht'){VIEW='akte';AKTE=id;TAB=tab;render();}
+let VIEW='assistenz', AKTE=null, TAB='uebersicht', ROUTE_DATUM=null;
+const VIEWS=[['assistenz','Assistenz'],['akten','Akten'],['posteingang','Posteingang'],['termine','Termine & Route'],['fristen','Fristen'],['workflows','Workflows']];
+function go(v){VIEW=v;AKTE=null;render();scrollTo(0,0);}
+function openAkte(id,tab='uebersicht'){VIEW='akte';AKTE=id;TAB=tab;render();scrollTo(0,0);}
+const val=id=>document.getElementById(id).value;
 function render(){
-  const offen=DB.inbox.filter(m=>!m.zugeordnet).length, tasks=aufgaben().filter(x=>x.prio>=2).length;
+  const offen=DB.inbox.filter(m=>!m.zugeordnet).length, wichtig=aufgaben().filter(x=>x.prio>=3).length;
   document.getElementById('nav').innerHTML=VIEWS.map(([k,l])=>`<button class="${VIEW===k?'active':''}" onclick="go('${k}')">${l}${
-    k==='assistenz'&&tasks?`<span class="badge">${tasks}</span>`:''}${k==='posteingang'&&offen?`<span class="badge">${offen}</span>`:''}</button>`).join('');
-  const app=document.getElementById('app');
-  app.innerHTML={assistenz:vAssistenz,akten:vAkten,posteingang:vPosteingang,termine:vTermine,workflows:vWorkflows,akte:vAkte}[VIEW]();
+    k==='assistenz'&&wichtig?`<span class="badge">${wichtig}</span>`:''}${k==='posteingang'&&offen?`<span class="badge">${offen}</span>`:''}</button>`).join('');
+  document.getElementById('app').innerHTML={assistenz:vAssistenz,akten:vAkten,posteingang:vPosteingang,termine:vTermine,fristen:vFristen,workflows:vWorkflows,akte:vAkte}[VIEW]();
 }
 const prioFarbe=p=>p>=3?'var(--bad)':p===2?'var(--warn)':'var(--muted)';
 function taskHtml(x,showAkte=true){
-  const a=x.akte, ueber=a&&daysBetween(TODAY(),x.faellig)<0;
-  const jump=x.aktion.typ==='view'?`go('${x.aktion.view}')`:x.aktion.typ==='tab'?`openAkte('${a.id}','${x.aktion.tab}')`:`openAkte('${a.id}')`;
+  const a=x.akte, ueber=daysBetween(TODAY(),x.faellig)<0;
+  const jump={view:()=>`go('${x.aktion.view}')`,tab:()=>`openAkte('${a.id}','${x.aktion.tab}')`,wf:()=>`openAkte('${a.id}','workflow')`,best:()=>`bestaetigen('${a.id}')`}[x.aktion.typ]();
   return `<div class="task"><span class="prio" style="background:${prioFarbe(x.prio)}"></span>
-    <div style="flex:1"><div>${esc(x.text)}</div><div class="muted" style="font-size:12px">${showAkte&&a?esc(a.az+' · '+a.vn+' · '):''}
+    <div style="flex:1"><div>${esc(x.text)}</div><div class="muted" style="font-size:12px">${showAkte&&a?esc(a.az+' · '+a.sparte+' · '+a.vn)+' · ':''}
       <span class="${ueber?'bad':''}">fällig ${fmt(x.faellig)}${ueber?' (überfällig)':''}</span></div></div>
-    <button class="btn" onclick="${jump}">Öffnen</button>
-    ${a?`<button class="btn" onclick="aufgabeErledigt('${a.id}','${esc(x.key)}',${x.aktion.typ==='wf'?`'${x.aktion.id}'`:'null'})">Erledigt</button>`:''}</div>`;
+    <button class="btn ${x.aktion.typ==='best'?'primary':''}" onclick="${jump}">${x.aktion.typ==='best'?'Entwurf öffnen':'Öffnen'}</button>
+    ${a&&x.aktion.typ!=='best'?`<button class="btn" onclick="aufgabeErledigt('${a.id}','${esc(x.key)}',${x.aktion.typ==='wf'?`'${x.aktion.id}'`:'null'})">Erledigt</button>`:''}</div>`;
 }
 function vAssistenz(){
   const t=aufgaben(), heute=DB.akten.flatMap(a=>a.termine.filter(x=>x.datum===TODAY()).map(x=>({...x,a})));
+  const pr=DB.akten.flatMap(a=>a.pruefungen), gef=pr.reduce((s,p)=>s+summen(p).gef,0), anr=pr.reduce((s,p)=>s+summen(p).anr,0);
+  const proSparte=Object.keys(SPARTEN).map(s=>[s,DB.akten.filter(a=>a.sparte===s&&a.status!=='abgeschlossen').length]).filter(x=>x[1]);
   return `<div class="grid">
-  <div class="card" style="grid-column:1/-1"><h2>Guten Tag – das steht heute an</h2>
-    <p class="muted">Alle Aufgaben unten wurden automatisch aus Workflows, Fristen, Terminen und E-Mails erzeugt. Nichts davon wurde manuell angelegt.</p>
+  <div class="card" style="grid-column:1/-1"><h2>Das steht heute an</h2>
+    <p class="muted">Alle Aufgaben wurden automatisch aus Workflows, Fristen, Terminen, Berechnungen und E-Mails erzeugt. Rot heißt: heute handeln.</p>
     ${t.length?t.map(x=>taskHtml(x)).join(''):'<p class="ok">Alles erledigt.</p>'}</div>
   <div class="card"><h2>Termine heute</h2>${heute.length?heute.sort((x,y)=>x.zeit.localeCompare(y.zeit)).map(x=>`<div class="task"><b>${x.zeit}</b><div style="flex:1">${esc(x.art)} – ${esc(x.a.vn)}<br><span class="muted">${esc(x.ort)}</span></div></div>`).join(''):'<p class="muted">Keine</p>'}
     <button class="btn" onclick="go('termine')">Route planen</button></div>
   <div class="card"><h2>Kennzahlen</h2><table>
     <tr><td>Offene Akten</td><td><b>${DB.akten.filter(a=>a.status!=='abgeschlossen').length}</b></td></tr>
+    ${proSparte.map(([s,n])=>`<tr><td class="muted">&nbsp;&nbsp;${esc(s)}</td><td>${n}</td></tr>`).join('')}
     <tr><td>Überfällige Schritte</td><td class="bad"><b>${DB.akten.flatMap(a=>a.workflow.filter(s=>!s.done&&s.faellig<TODAY())).length}</b></td></tr>
-    <tr><td>Ø Laufzeit offener Akten</td><td><b>${Math.round(DB.akten.reduce((s,a)=>s+daysBetween(a.eingang,TODAY()),0)/Math.max(1,DB.akten.length))} Tage</b></td></tr>
-    <tr><td>Geprüftes Volumen / Kürzung</td><td><b>${eur(DB.akten.flatMap(a=>a.pruefungen).reduce((s,p)=>s+summen(p).gef,0))} / ${eur(DB.akten.flatMap(a=>a.pruefungen).reduce((s,p)=>s+summen(p).gef-summen(p).anr,0))}</b></td></tr>
-  </table></div></div>`;
+    <tr><td>Geprüft / gekürzt</td><td><b>${eur(gef)} / ${eur(gef-anr)}</b></td></tr></table></div></div>`;
 }
 function vAkten(){
   return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Akten</h2>
-    <div class="row"><input id="such" placeholder="Suche AZ, VN, Ort…" oninput="filterAkten(this.value)" style="width:220px"><button class="btn primary" onclick="dlgNeueAkte()">+ Neue Akte</button></div></div>
+    <div class="row"><input placeholder="Suche AZ, VN, Ort, Schiff…" oninput="filterAkten(this.value)" style="width:220px">
+    <select onchange="filterSparte(this.value)" style="width:auto"><option value="">alle Sparten</option>${Object.keys(SPARTEN).map(s=>`<option>${s}</option>`).join('')}</select>
+    <button class="btn primary" onclick="dlgNeueAkte()">+ Neue Akte</button></div></div>
   <table id="aktentab"><tr><th>AZ</th><th>VN</th><th>Sparte</th><th>Auftraggeber</th><th>Fortschritt</th><th>Nächster Schritt</th></tr>
   ${DB.akten.map(a=>{const d=a.workflow.filter(s=>s.done).length,n=a.workflow.find(s=>!s.done);
-    return `<tr class="click" data-s="${esc((a.az+a.vn+a.ort+a.schadennr).toLowerCase())}" onclick="openAkte('${a.id}')"><td><b>${esc(a.az)}</b><br><span class="muted">${esc(a.schadennr)}</span></td><td>${esc(a.vn)}<br><span class="muted">${esc(a.ort)}</span></td>
-    <td>${esc(a.sparte)}</td><td>${esc(a.auftraggeber)}</td><td>${d}/${a.workflow.length}</td><td class="${n&&n.faellig<TODAY()?'bad':''}">${n?esc(n.t)+'<br><span class="muted">'+fmt(n.faellig)+'</span>':'<span class="ok">fertig</span>'}</td></tr>`}).join('')}
+    return `<tr class="click" data-sp="${esc(a.sparte)}" data-s="${esc([a.az,a.vn,a.ort,a.schadennr,a.gutachten.schiff,a.gutachten.eni].join(' ').toLowerCase())}" onclick="openAkte('${a.id}')">
+    <td><b>${esc(a.az)}</b><br><span class="muted">${esc(a.schadennr)}</span></td><td>${esc(a.vn)}<br><span class="muted">${esc(a.ort)}</span></td>
+    <td>${esc(a.sparte)}${DB.akten.some(b=>b!==a&&b.ereignis===a.ereignis)?' <span class="pill">verknüpft</span>':''}</td><td>${esc(a.auftraggeber)}</td><td>${a.status==='abgeschlossen'?'<span class="ok">abgeschlossen</span>':d+'/'+a.workflow.length}</td>
+    <td class="${n&&n.faellig<TODAY()?'bad':''}">${n?esc(n.t)+'<br><span class="muted">'+fmt(n.faellig)+'</span>':'<span class="ok">fertig</span>'}</td></tr>`}).join('')}
   </table></div>`;
 }
-function filterAkten(q){q=q.toLowerCase();document.querySelectorAll('#aktentab tr[data-s]').forEach(r=>r.style.display=r.dataset.s.includes(q)?'':'none');}
+let FQ='', FS='';
+function filterAkten(q){FQ=q.toLowerCase();applyFilter();}
+function filterSparte(s){FS=s;applyFilter();}
+function applyFilter(){document.querySelectorAll('#aktentab tr[data-s]').forEach(r=>r.style.display=r.dataset.s.includes(FQ)&&(!FS||r.dataset.sp===FS)?'':'none');}
 function dlgNeueAkte(){
   const vn=prompt('Versicherungsnehmer:'); if(!vn) return;
-  const sparte=prompt('Sparte ('+Object.keys(SPARTEN).join(', ')+'):','Leitungswasser');
-  if(!SPARTEN[sparte]) return alert('Unbekannte Sparte');
-  const a=neueAkte({vn,sparte,ort:prompt('Risikoort:')||'',tel:prompt('Telefon:')||''}); openAkte(a.id);
+  const sparte=prompt('Sparte ('+Object.keys(SPARTEN).join(', ')+'):','Gebäude'); if(!SPARTEN[sparte]) return alert('Unbekannte Sparte');
+  openAkte(neueAkte({vn,sparte,ort:prompt('Risikoort / Liegeplatz:')||'',tel:prompt('Telefon:')||''}).id);
 }
 function vPosteingang(){
-  return `<div class="card"><h2>Posteingang</h2><p class="muted">Prototyp: E-Mails sind simuliert. Die Zuordnung erkennt Aktenzeichen, Schadennummer und Absender. Neue Aufträge werden erkannt und als Akte vorgeschlagen.</p>
-  ${DB.inbox.map(m=>{const vor=erkenneAkte(m), neu=!vor&&istNeuerAuftrag(m);
-    return `<div class="card" style="margin:10px 0"><div class="row" style="justify-content:space-between"><b>${esc(m.betreff)}</b><span class="muted">${esc(m.von)} · ${fmt(m.datum)}</span></div>
-    <pre style="white-space:pre-wrap;font:inherit;margin:8px 0">${esc(m.text)}</pre>
-    ${m.zugeordnet?`<span class="ok">✓ zugeordnet zu ${esc(m.zugeordnet)}</span>`:`<div class="row">
-      ${vor?`<span class="pill">Vorschlag: ${esc(vor.az)} (${esc(vor.vn)})</span><button class="btn primary" onclick="zuordnen('${m.id}','${vor.id}')">Zuordnen</button>`:''}
-      ${neu?`<span class="pill">Erkannt: neuer Auftrag</span><button class="btn primary" onclick="akteAusMail('${m.id}')">Akte daraus anlegen</button>`:''}
-      <select onchange="this.value&&zuordnen('${m.id}',this.value)" style="width:auto"><option value="">manuell zuordnen…</option>${DB.akten.map(a=>`<option value="${a.id}">${esc(a.az)} – ${esc(a.vn)}</option>`).join('')}</select></div>`}
-    </div>`}).join('')}
-  <h3>Simulierten Eingang hinzufügen</h3>
-  <div class="grid"><div><label>Von</label><input id="m_von" value="kunde@example.de"></div><div><label>Betreff</label><input id="m_betr" placeholder="z. B. Frage zu SV-2026-0142"></div></div>
-  <label>Text</label><textarea id="m_text"></textarea><p><button class="btn" onclick="mailRein()">Empfangen</button></p></div>`;
+  return `<div class="card"><h2>Posteingang</h2>
+  <div class="drop" id="drop" ondragover="event.preventDefault();this.classList.add('over')" ondragleave="this.classList.remove('over')"
+    ondrop="event.preventDefault();this.classList.remove('over');importEml(event.dataTransfer.files)">
+    <b>Echte E-Mails importieren:</b> .eml-Dateien hierher ziehen oder <label style="display:inline;color:var(--accent);cursor:pointer;font-size:inherit">auswählen<input type="file" accept=".eml,.msg" multiple style="display:none" onchange="importEml(this.files)"></label>
+    <div style="font-size:12px;margin-top:6px">Die Dateien werden nur in diesem Browser gelesen, nichts wird hochgeladen. Outlook: Mail öffnen → Datei → Speichern unter → .eml (Format „Outlook-Nachrichtenformat“ = .msg wird nicht gelesen).</div></div>
+  <p class="muted">Die Zuordnung erkennt Aktenzeichen, Schaden-Nr., Schiffsname/ENI, Zeichen von Beteiligten sowie Absender = VN oder Beteiligter. Bei neuen Aufträgen werden Sparte, Schaden-Nr., VN, Adresse und Telefon vorgeschlagen.</p></div>
+  ${DB.inbox.map(m=>{const vor=erkenneAkte(m), neu=istNeuerAuftrag(m)&&!m.zugeordnet, ex=neu?extrahiereAuftrag(m):null;
+    return `<div class="card"><div class="row" style="justify-content:space-between"><b>${esc(m.betreff)}</b><span class="muted">${esc(m.von)} · ${fmt(m.datum)}</span></div>
+    <pre style="white-space:pre-wrap;font:inherit;margin:8px 0;max-height:220px;overflow:auto">${esc(m.text)}</pre>
+    ${m.anhaenge?.length?`<div class="row">${m.anhaenge.map(x=>`<span class="pill">📎 ${esc(x)}</span>`).join('')}</div>`:''}
+    ${m.zugeordnet?`<p class="ok">✓ zugeordnet zu ${esc(m.zugeordnet)}</p>`:`
+      ${neu?`<div class="hint"><b>Neuer Auftrag erkannt</b> – Sparte <b>${esc(ex.sparte)}</b>, Schaden-Nr. <b>${esc(ex.schadennr||'?')}</b>, VN <b>${esc(ex.vn||'?')}</b>, Ort <b>${esc(ex.ort||'?')}</b>, Tel. <b>${esc(ex.tel||'?')}</b>
+        <div class="row" style="margin-top:6px"><button class="btn primary" onclick="akteAusMail('${m.id}')">Akte anlegen</button></div></div>`:''}
+      <div class="row" style="margin-top:8px">${vor?`<span class="pill">Vorschlag: ${esc(vor.az)} (${esc(treffer(vor,m))})</span><button class="btn ${neu?'':'primary'}" onclick="zuordnen('${m.id}','${vor.id}')">Zuordnen</button>`:''}
+      <select onchange="this.value&&zuordnen('${m.id}',this.value)" style="width:auto"><option value="">manuell zuordnen…</option>${DB.akten.map(a=>`<option value="${a.id}">${esc(a.az)} – ${esc(a.vn)} (${esc(a.sparte)})</option>`).join('')}</select></div>`}
+    </div>`}).join('')}`;
 }
-function mailRein(){
-  const m={id:uid(),von:val('m_von'),betreff:val('m_betr'),text:val('m_text'),datum:TODAY(),zugeordnet:null};
-  if(!m.betreff) return; DB.inbox.unshift(m);
-  const a=erkenneAkte(m); if(a && !istNeuerAuftrag(m)) zuordnen(m.id,a.id); else {save();render();}
-}
-const val=id=>document.getElementById(id).value;
 function vTermine(){
-  const datum=window.ROUTE_DATUM||TODAY();
+  const datum=ROUTE_DATUM||TODAY();
   const stops=DB.akten.flatMap(a=>a.termine.filter(t=>t.datum===datum).map(t=>({...t,az:a.az,vn:a.vn})));
-  const r=route(stops);
-  const url='https://www.google.com/maps/dir/'+[BUERO,...r.order,BUERO].map(s=>encodeURIComponent(s.ort)).join('/');
+  const r=route(stops), url='https://www.google.com/maps/dir/'+[BUERO,...r.order,BUERO].map(s=>encodeURIComponent(s.ort)).join('/');
   return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Tagesroute</h2>
-    <input type="date" value="${datum}" style="width:auto" onchange="window.ROUTE_DATUM=this.value;render()"></div>
+    <input type="date" value="${datum}" style="width:auto" onchange="ROUTE_DATUM=this.value;render()"></div>
   ${r.order.length?`<ol>${r.order.map(s=>`<li><b>${esc(s.zeit)}</b> ${esc(s.art)} – ${esc(s.vn)} (${esc(s.az)})<br><span class="muted">${esc(s.ort)}</span></li>`).join('')}</ol>
-    <p>Geschätzte Strecke: <b>${Math.round(r.km)} km</b> (Rundtour ab ${BUERO.ort})</p>
+    <p>Geschätzte Strecke: <b>${Math.round(r.km)} km</b> (Rundtour ab Büro ${BUERO.ort}, Luftlinie × 1,3)</p>
     ${r.order.some((s,i)=>i&&s.zeit<r.order[i-1].zeit)?'<p class="warn">⚠ Die kürzeste Reihenfolge passt nicht zu den vereinbarten Uhrzeiten – Termine ggf. tauschen.</p>':''}
     <a class="btn primary" href="${url}" target="_blank" rel="noopener">In Google Maps öffnen</a>`:'<p class="muted">Keine Termine mit Koordinaten an diesem Tag.</p>'}
-  </div>
+  ${r.ohne.length?`<p class="warn">${r.ohne.length} Termin(e) ohne Koordinaten – in der Akte (Übersicht) Breite/Länge eintragen.</p>`:''}</div>
   <div class="card"><h2>Alle Termine</h2><table><tr><th>Datum</th><th>Zeit</th><th>Akte</th><th>Art</th><th>Ort</th></tr>
   ${DB.akten.flatMap(a=>a.termine.map(t=>({...t,a}))).sort((x,y)=>(x.datum+x.zeit).localeCompare(y.datum+y.zeit)).map(t=>`<tr class="click" onclick="openAkte('${t.a.id}','termine')"><td>${fmt(t.datum)}</td><td>${t.zeit}</td><td>${esc(t.a.az)}</td><td>${esc(t.art)}</td><td>${esc(t.ort)}</td></tr>`).join('')}
   </table></div>`;
 }
+function vFristen(){
+  const all=DB.akten.filter(a=>a.status!=='abgeschlossen').flatMap(a=>fristen(a).map(f=>({...f,a}))).sort((x,y)=>x.d.localeCompare(y.d));
+  return `<div class="card"><h2>Gesetzliche und vertragliche Fristen – alle Akten</h2><p class="muted">Automatisch berechnet aus den Daten der Gutachten-Maske. Arbeitshilfe, keine Rechtsberatung. Hemmung und Unterbrechung werden nicht berücksichtigt.</p>
+  <table><tr><th>Datum</th><th>Frist</th><th>Akte</th><th>Grundlage</th></tr>
+  ${all.map(f=>{const d=daysBetween(TODAY(),f.d);return `<tr class="click" onclick="openAkte('${f.a.id}','berechnung')"><td class="${d<0?'bad':d<=30?'warn':''}"><b>${fmt(f.d)}</b><br><span style="font-size:12px">${d<0?'abgelaufen':'in '+d+' Tagen'}</span></td>
+    <td>${esc(f.t)}</td><td>${esc(f.a.az)}<br><span class="muted">${esc(f.a.sparte)}</span></td><td class="muted" style="font-size:12px">${esc(f.b)}</td></tr>`}).join('')||'<tr><td colspan="4" class="muted">Keine Fristen erfasst</td></tr>'}</table></div>`;
+}
 function vWorkflows(){
-  return `<div class="card"><h2>Workflow-Vorlagen je Sparte</h2><p class="muted">Neue Akten übernehmen die Vorlage ihrer Sparte. In der Akte selbst kann der Ablauf danach frei angepasst werden, ohne die Vorlage zu ändern.</p></div>
-  <div class="grid">${Object.entries(SPARTEN).map(([k,steps])=>`<div class="card"><h2>${esc(k)}</h2>${steps.map(s=>`<div class="step"><span style="flex:1">${esc(s.t)}</span><span class="pill">T+${s.d}</span>${s.kind?`<span class="pill">${s.kind}</span>`:''}</div>`).join('')}</div>`).join('')}</div>`;
+  return `<div class="card"><h2>Workflow-Vorlagen je Sparte</h2><p class="muted">Neue Akten übernehmen die Vorlage ihrer Sparte. In der Akte ist der Ablauf danach frei anpassbar, die Vorlage bleibt unverändert. „T+n“ = Frist in Tagen ab Auftragseingang.</p></div>
+  <div class="grid">${Object.entries(SPARTEN).map(([k,s])=>`<div class="card"><h2>${esc(k)}</h2>${s.wf.map(([t,d,kind])=>`<div class="step"><span style="flex:1">${esc(t)}</span><span class="pill">T+${d}</span>${kind?`<span class="pill">${kind}</span>`:''}</div>`).join('')}
+    <h3>Spartenfelder</h3><div class="muted" style="font-size:12px">${s.felder.map(f=>esc(f[1])).join(' · ')}</div></div>`).join('')}</div>`;
 }
 
 /* ---------- Akte ---------- */
 function vAkte(){
-  const a=DB.akten.find(x=>x.id===AKTE);
-  const tabs=[['uebersicht','Übersicht'],['workflow','Workflow'],['kommunikation','Kommunikation'],['termine','Termine'],['gutachten','Gutachten'],['pruefung','Angebots-/Rechnungsprüfung']];
-  const t=aufgaben().filter(x=>x.akte===a);
+  const a=A(AKTE);
+  const tabs=[['uebersicht','Übersicht'],['workflow','Workflow'],['kommunikation','Kommunikation'],['beteiligte','Beteiligte'],['termine','Termine'],
+    ['gutachten','Gutachten-Maske'],['berechnung','Berechnung & Fristen'],['pruefung','Angebots-/Rechnungsprüfung']];
   return `<div class="row" style="justify-content:space-between;margin-bottom:10px"><div><button class="btn" onclick="go('akten')">← Akten</button>
     <b style="font-size:17px;margin-left:8px">${esc(a.az)}</b> <span class="muted">${esc(a.vn)} · ${esc(a.sparte)}</span></div>
-    <div class="row"><button class="btn primary" onclick="pdfGutachten(DB.akten.find(x=>x.id==='${a.id}'))">Gutachten als PDF</button>
+    <div class="row"><button class="btn primary" onclick="pdfGutachten(A('${a.id}'))">Gutachten als PDF</button>
+    <button class="btn" onclick="verknuepfteAkte('${a.id}')">+ Sparte zum Ereignis</button>
     <button class="btn" onclick="akteSchliessen('${a.id}')">${a.status==='abgeschlossen'?'Wieder öffnen':'Akte abschließen'}</button></div></div>
   <div class="tabs">${tabs.map(([k,l])=>`<button class="btn ${TAB===k?'primary':''}" onclick="TAB='${k}';render()">${l}</button>`).join('')}</div>
-  ${{uebersicht:tUebersicht,workflow:tWorkflow,kommunikation:tKomm,termine:tTermine,gutachten:tGutachten,pruefung:tPruefung}[TAB](a,t)}`;
+  ${{uebersicht:tUebersicht,workflow:tWorkflow,kommunikation:tKomm,beteiligte:tBeteiligte,termine:tTermine,gutachten:tGutachten,berechnung:tBerechnung,pruefung:tPruefung}[TAB](a)}`;
 }
-function akteSchliessen(id){const a=DB.akten.find(x=>x.id===id);a.status=a.status==='abgeschlossen'?'offen':'abgeschlossen';log(a,'Status: '+a.status);save();render();}
-function setF(id,k,v){const a=DB.akten.find(x=>x.id===id);a[k]=v;save();}
-function tUebersicht(a,t){
-  const f=(k,l)=>`<label>${l}</label><input value="${esc(a[k])}" onchange="setF('${a.id}','${k}',this.value)">`;
-  const d=a.workflow.filter(s=>s.done).length;
-  return `<div class="grid"><div class="card"><h2>Stammdaten</h2>${f('schadennr','Schaden-Nr.')}${f('auftraggeber','Auftraggeber')}${f('sachbearbeiter','Sachbearbeiter VR')}
-    ${f('vn','Versicherungsnehmer')}${f('tel','Telefon')}${f('mail','E-Mail')}${f('ort','Risikoort')}
+function akteSchliessen(id){const a=A(id);a.status=a.status==='abgeschlossen'?'offen':'abgeschlossen';log(a,'Status: '+a.status);save();render();}
+function setF(id,k,v){const a=A(id);a[k]=(k==='lat'||k==='lon')?num(v):v;save();}
+function tUebersicht(a){
+  const f=(k,l)=>`<label>${l}</label><input value="${esc(a[k]??'')}" onchange="setF('${a.id}','${k}',this.value)">`;
+  const d=a.workflow.filter(s=>s.done).length, t=aufgaben().filter(x=>x.akte===a), verk=DB.akten.filter(b=>b!==a&&b.ereignis===a.ereignis);
+  return `<div class="grid"><div class="card"><h2>Stammdaten</h2>${f('schadennr','Schaden-Nr. Auftraggeber')}${f('vsnr','Versicherungsschein-Nr.')}${f('auftraggeber','Auftraggeber')}${f('auftraggeberMail','E-Mail Auftraggeber')}
+    ${f('vn','Versicherungsnehmer')}${f('tel','Telefon VN')}${f('mail','E-Mail VN')}${f('ort','Risikoort / Liegeplatz')}
+    <div class="row"><div style="flex:1">${f('lat','Breite (für Route)')}</div><div style="flex:1">${f('lon','Länge')}</div></div>
     <label>Beschreibung</label><textarea onchange="setF('${a.id}','beschreibung',this.value)">${esc(a.beschreibung)}</textarea></div>
   <div><div class="card"><h2>Stand</h2><p>Eingang ${fmt(a.eingang)} · ${daysBetween(a.eingang,TODAY())} Tage · Workflow ${d}/${a.workflow.length}</p>
     <div style="height:8px;background:var(--line);border-radius:4px"><div style="height:8px;width:${100*d/a.workflow.length}%;background:var(--accent);border-radius:4px"></div></div>
-    <p class="row" style="margin-top:10px"><a class="btn" href="tel:${esc(a.tel)}">📞 Anrufen</a><a class="btn" href="mailto:${esc(a.mail)}?subject=${encodeURIComponent(a.az+' / '+a.schadennr)}">✉ E-Mail</a></p></div>
+    <p class="row" style="margin-top:10px"><a class="btn" href="tel:${esc(a.tel)}">📞 Anrufen</a><a class="btn" href="${mailto(a.mail,a.az+' / '+a.schadennr)}">✉ E-Mail an VN</a></p>
+    ${verk.length?`<h3>Verknüpfte Akten (gleiches Ereignis)</h3>${verk.map(b=>`<div><a href="#" onclick="openAkte('${b.id}');return false">${esc(b.az)}</a> – ${esc(b.sparte)}</div>`).join('')}`:''}</div>
   <div class="card"><h2>Offene Aufgaben</h2>${t.length?t.map(x=>taskHtml(x,false)).join(''):'<p class="muted">Keine</p>'}</div>
-  <div class="card"><h2>Verlauf</h2>${a.notizen.slice(0,8).map(n=>`<div class="muted" style="font-size:12px">${fmt(n.datum)} · ${esc(n.text)}</div>`).join('')}</div></div></div>`;
+  <div class="card"><h2>Verlauf</h2>${a.notizen.slice(0,10).map(n=>`<div class="muted" style="font-size:12px">${fmt(n.datum)} · ${esc(n.text)}</div>`).join('')}</div></div></div>`;
 }
 function tWorkflow(a){
   return `<div class="card"><h2>Workflow dieser Akte</h2><p class="muted">Vorlage: ${esc(a.sparte)}. Änderungen gelten nur für diese Akte.</p>
@@ -401,55 +631,91 @@ function tWorkflow(a){
     <button class="btn" onclick="wfMove('${a.id}',${i},-1)">↑</button><button class="btn" onclick="wfMove('${a.id}',${i},1)">↓</button><button class="btn" onclick="wfDel('${a.id}',${i})">✕</button></div>`).join('')}
   <div class="row" style="margin-top:10px"><input id="wf_neu" placeholder="Zusätzlicher Schritt, z. B. Statiker hinzuziehen" style="flex:1"><input id="wf_tage" type="number" value="3" style="width:80px" title="Tage ab heute"><button class="btn primary" onclick="wfAdd('${a.id}')">+ Schritt</button></div></div>`;
 }
-const A=id=>DB.akten.find(x=>x.id===id);
-function wfToggle(id,i){const a=A(id);a.workflow[i].done=!a.workflow[i].done;if(a.workflow[i].done)log(a,'Workflow: „'+a.workflow[i].t+'“ erledigt');save();render();}
+function wfToggle(id,i){const a=A(id),s=a.workflow[i];s.done=!s.done;if(s.done)log(a,'Workflow: „'+s.t+'“ erledigt');save();render();}
 function wfDate(id,i,v){A(id).workflow[i].faellig=v;save();}
 function wfMove(id,i,d){const w=A(id).workflow,j=i+d;if(j<0||j>=w.length)return;[w[i],w[j]]=[w[j],w[i]];save();render();}
 function wfDel(id,i){A(id).workflow.splice(i,1);save();render();}
 function wfAdd(id){const t=val('wf_neu');if(!t)return;const a=A(id);a.workflow.push({id:uid(),t,d:0,done:false,faellig:addDays(TODAY(),+val('wf_tage')||0)});log(a,'Workflow-Schritt ergänzt: '+t);save();render();}
 function tKomm(a){
-  return `<div class="grid"><div class="card"><h2>E-Mails</h2>${a.emails.length?a.emails.map(m=>`<div class="task"><div style="flex:1"><b>${esc(m.betreff)}</b> <span class="muted">${esc(m.von)} · ${fmt(m.datum)}</span><pre style="white-space:pre-wrap;font:inherit;margin:4px 0">${esc(m.text)}</pre></div>
-    ${m.erledigt?'<span class="ok">✓</span>':`<button class="btn" onclick="mailErledigt('${a.id}','${m.id}')">Erledigt</button>`}</div>`).join(''):'<p class="muted">Keine</p>'}
-    <a class="btn" href="mailto:${esc(a.mail)}?subject=${encodeURIComponent(a.az+' / '+a.schadennr)}">Neue E-Mail</a></div>
-  <div class="card"><h2>Telefonnotiz</h2><label>Gesprächspartner</label><input id="t_mit" value="${esc(a.vn)}">
+  const alle=[a.mail,a.auftraggeberMail,...a.beteiligte.map(b=>b.mail)].filter(Boolean);
+  return `<div class="grid"><div class="card"><h2>E-Mails</h2>${a.emails.length?a.emails.map(m=>`<div class="task"><div style="flex:1"><b>${esc(m.betreff)}</b> <span class="muted">${esc(m.von)} · ${fmt(m.datum)}</span>
+      <pre style="white-space:pre-wrap;font:inherit;margin:4px 0;max-height:180px;overflow:auto">${esc(m.text)}</pre>${(m.anhaenge||[]).map(x=>`<span class="pill">📎 ${esc(x)}</span> `).join('')}
+      <div class="row" style="margin-top:4px"><a class="btn" href="${mailto(m.von,'AW: '+m.betreff+' ['+a.az+']','\n\n----- Ursprüngliche Nachricht -----\n'+m.text)}">Antworten</a>
+      ${m.erledigt?'<span class="ok">✓ erledigt</span>':`<button class="btn" onclick="mailErledigt('${a.id}','${m.id}')">Erledigt</button>`}</div></div></div>`).join(''):'<p class="muted">Keine</p>'}
+    <p class="row"><a class="btn" href="${mailto(a.mail,a.az+' / '+a.schadennr)}">Neue E-Mail an VN</a>${alle.length>1?`<a class="btn" href="${mailto(alle.join(','),a.az+' / '+a.schadennr)}">An alle Beteiligten</a>`:''}</p>
+    <p class="muted" style="font-size:12px">Ausgehende Mails nennen das Aktenzeichen im Betreff. Antworten werden dadurch beim Import automatisch zugeordnet.</p></div>
+  <div class="card"><h2>Telefonnotiz</h2><label>Gesprächspartner</label><select id="t_mit">${[a.vn,...a.beteiligte.map(b=>b.rolle+': '+(b.name||b.firma))].map(x=>`<option>${esc(x)}</option>`).join('')}<option>Sonstige</option></select>
     <label>Inhalt</label><textarea id="t_text"></textarea>
-    <label>Wiedervorlage in Tagen (optional – erzeugt Aufgabe)</label><input id="t_wv" type="number">
+    <label>Wiedervorlage in Tagen (optional, erzeugt Aufgabe)</label><input id="t_wv" type="number">
     <p><button class="btn primary" onclick="telefonat('${a.id}')">Speichern</button></p>
     <h3>Notizen & Verlauf</h3>${a.notizen.map(n=>`<div style="font-size:12px;padding:3px 0"><span class="muted">${fmt(n.datum)} · ${n.typ}</span> ${esc(n.text)}</div>`).join('')}</div></div>`;
 }
-function mailErledigt(id,mid){const a=A(id);a.emails.find(m=>m.id===mid).erledigt=true;save();render();}
+function mailErledigt(id,mid){A(id).emails.find(m=>m.id===mid).erledigt=true;save();render();}
 function telefonat(id){
   const a=A(id),txt=val('t_text');if(!txt)return;
-  a.notizen.unshift({id:uid(),datum:TODAY(),typ:'telefon',text:val('t_mit')+': '+txt});
-  const wv=+val('t_wv'); if(wv){ const i=a.workflow.findIndex(s=>!s.done); a.workflow.splice(i<0?a.workflow.length:i,0,{id:uid(),t:'Wiedervorlage: '+txt.slice(0,50),d:0,done:false,faellig:addDays(TODAY(),wv)}); }
-  // Termin im Text erkannt? → Hinweis
-  if(/termin|uhr|montag|dienstag|mittwoch|donnerstag|freitag/i.test(txt)) alert('Hinweis: Im Gespräch wurde offenbar ein Termin besprochen – bitte im Reiter „Termine“ eintragen.');
+  log(a,val('t_mit')+': '+txt,'telefon');
+  const wv=+val('t_wv'); if(wv){ const i=a.workflow.findIndex(s=>!s.done); a.workflow.splice(i<0?a.workflow.length:i,0,{id:uid(),t:'Wiedervorlage: '+txt.slice(0,60),d:0,done:false,faellig:addDays(TODAY(),wv)}); }
+  if(/termin|uhr\b|montag|dienstag|mittwoch|donnerstag|freitag/i.test(txt)){ TAB='termine'; alert('Im Gespräch wurde offenbar ein Termin besprochen. Bitte jetzt eintragen.'); }
   save();render();
 }
+function tBeteiligte(a){
+  return `<div class="card"><h2>Beteiligte</h2><p class="muted">Absender, die hier erfasst sind, werden beim Mail-Import automatisch dieser Akte zugeordnet. Das gilt auch für ihre Zeichen im Mailtext.</p>
+  <table><tr><th>Rolle</th><th>Name</th><th>Firma</th><th>E-Mail</th><th>Telefon</th><th>Deren Zeichen</th><th></th></tr>
+  ${a.beteiligte.map((b,i)=>`<tr>${['rolle','name','firma','mail','tel','az'].map(k=>`<td>${k==='rolle'?`<select onchange="bSet('${a.id}',${i},'rolle',this.value)">${ROLLEN.map(r=>`<option ${b.rolle===r?'selected':''}>${r}</option>`).join('')}</select>`:
+    `<input value="${esc(b[k])}" onchange="bSet('${a.id}',${i},'${k}',this.value)">`}</td>`).join('')}<td><button class="btn" onclick="A('${a.id}').beteiligte.splice(${i},1);save();render()">✕</button></td></tr>`).join('')}
+  </table><p><button class="btn primary" onclick="A('${a.id}').beteiligte.push({id:uid(),rolle:'Sonstige',name:'',firma:'',mail:'',tel:'',az:''});save();render()">+ Beteiligter</button></p></div>`;
+}
+function bSet(id,i,k,v){A(id).beteiligte[i][k]=v;save();}
 function tTermine(a){
-  return `<div class="card"><h2>Termine</h2><table><tr><th>Datum</th><th>Zeit</th><th>Art</th><th>Protokoll</th></tr>
-  ${a.termine.map((t,i)=>`<tr><td>${fmt(t.datum)}</td><td>${t.zeit}</td><td>${esc(t.art)}</td><td><textarea onchange="A('${a.id}').termine[${i}].protokoll=this.value;save()" placeholder="Protokoll / Feststellungen">${esc(t.protokoll||'')}</textarea></td></tr>`).join('')}</table>
+  return `<div class="card"><h2>Termine</h2><table><tr><th>Datum</th><th>Zeit</th><th>Art / Ort</th><th>Protokoll</th></tr>
+  ${a.termine.map((t,i)=>`<tr><td>${fmt(t.datum)}</td><td>${t.zeit}</td><td>${esc(t.art)}<br><span class="muted">${esc(t.ort)}</span></td><td><textarea onchange="A('${a.id}').termine[${i}].protokoll=this.value;save()" placeholder="Protokoll / Feststellungen / Anwesende">${esc(t.protokoll||'')}</textarea></td></tr>`).join('')}</table>
   <h3>Neuer Termin</h3><div class="grid"><div><label>Datum</label><input id="tm_d" type="date" value="${addDays(TODAY(),2)}"></div><div><label>Uhrzeit</label><input id="tm_z" type="time" value="10:00"></div>
-  <div><label>Art</label><select id="tm_a"><option>Ortstermin</option><option>Nachbesichtigung</option><option>Telefontermin</option></select></div></div>
-  <p><button class="btn primary" onclick="terminAdd('${a.id}')">Termin anlegen</button> <span class="muted">Erzeugt automatisch Vorbereitungs- und Protokoll-Erinnerungen; „Ortstermin vereinbaren“ wird abgehakt.</span></p></div>`;
+  <div><label>Art</label><select id="tm_a"><option>Ortstermin</option><option>Besichtigung</option><option>Gemeinsame Besichtigung</option><option>Nachbesichtigung</option><option>Werftbesichtigung</option><option>Telefontermin</option></select></div>
+  <div><label>Ort (abweichend, z. B. Liegeplatz/Werft)</label><input id="tm_o" value="${esc(a.ort)}"></div></div>
+  <p><button class="btn primary" onclick="terminAdd('${a.id}')">Termin anlegen</button> <span class="muted">Erzeugt Vorbereitungs- und Protokoll-Erinnerungen und hakt den Schritt „vereinbaren“ ab.</span></p></div>`;
 }
 function terminAdd(id){
-  const a=A(id);a.termine.push({id:uid(),datum:val('tm_d'),zeit:val('tm_z'),art:val('tm_a'),ort:a.ort,lat:a.lat,lon:a.lon});
-  const s=a.workflow.find(s=>s.kind==='termin'&&!s.done); if(s){s.done=true;}
-  const durch=a.workflow.find(s=>/durchführen|besichtigung$/i.test(s.t)&&!s.done); if(durch) durch.faellig=val('tm_d');
+  const a=A(id), ort=val('tm_o'), gleich=ort===a.ort;
+  a.termine.push({id:uid(),datum:val('tm_d'),zeit:val('tm_z'),art:val('tm_a'),ort,lat:gleich?a.lat:null,lon:gleich?a.lon:null});
+  const s=a.workflow.find(s=>s.kind==='termin'&&!s.done); if(s) s.done=true;
+  const i=a.workflow.indexOf(s), n=i>=0?a.workflow[i+1]:null; if(n&&!n.done) n.faellig=val('tm_d');
   log(a,`Termin ${val('tm_a')} am ${fmt(val('tm_d'))} ${val('tm_z')} angelegt`);save();render();
 }
 function tGutachten(a){
   const g=a.gutachten;
-  const field=([k,l,typ,opt])=>`<div><label>${l}</label>${typ==='textarea'?`<textarea onchange="gSet('${a.id}','${k}',this.value)">${esc(g[k]||'')}</textarea>`:
-    typ==='select'?`<select onchange="gSet('${a.id}','${k}',this.value)"><option></option>${opt.map(o=>`<option ${g[k]===o?'selected':''}>${o}</option>`).join('')}</select>`:
-    `<input type="${typ}" value="${esc(g[k]||'')}" onchange="gSet('${a.id}','${k}',this.value)">`}</div>`;
-  const ausPr=a.pruefungen.reduce((s,p)=>s+summen(p).anr,0);
-  return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Gutachten-Maske</h2><button class="btn primary" onclick="pdfGutachten(A('${a.id}'))">PDF erstellen</button></div>
-  <p class="muted">Jedes Feld ist ein Datenfeld der Akte – auswertbar, durchsuchbar, wiederverwendbar.${ausPr?` Anerkannte Summe aus Prüfungen: <b>${eur(ausPr)}</b> <button class="btn" onclick="gSet('${a.id}','schadenhoehe_netto',${ausPr.toFixed(2)});render()">übernehmen</button>`:''}</p>
-  <div class="grid">${GUTACHTEN_FELDER.map(field).join('')}</div></div>`;
+  const field=([k,l,typ,opt,pf])=>`<div><label>${esc(l)}${pf?' *':''}</label>${typ==='textarea'?`<textarea onchange="gSet('${a.id}','${k}',this.value)">${esc(g[k]||'')}</textarea>`:
+    typ==='select'?`<select onchange="gSet('${a.id}','${k}',this.value,1)"><option></option>${opt.map(o=>`<option ${g[k]===o?'selected':''}>${o}</option>`).join('')}</select>`:
+    `<input type="${typ==='eur'?'number':typ}" ${typ==='eur'?'step="0.01"':''} value="${esc(g[k]||'')}" onchange="gSet('${a.id}','${k}',this.value,${typ==='date'?1:0})">`}</div>`;
+  const ausPr=a.pruefungen.reduce((s,p)=>s+summen(p).anr,0), B=berechnung(a);
+  return `<div class="card"><div class="row" style="justify-content:space-between"><h2>Gutachten-Maske ${esc(a.sparte)}</h2><button class="btn primary" onclick="pdfGutachten(A('${a.id}'))">PDF erstellen</button></div>
+  <p class="muted">Jedes Feld ist ein Datenfeld der Akte und damit auswertbar und durchsuchbar. Fristen und Berechnungen werden daraus automatisch abgeleitet. * = Pflichtfeld.
+  ${ausPr?`<br>Anerkannte Summe aus Prüfungen: <b>${eur(ausPr)}</b> <button class="btn" onclick="gSet('${a.id}','schadenhoehe_netto','${ausPr.toFixed(2)}',1)">übernehmen</button>`:''}</p>
+  <h3>Allgemein</h3><div class="grid">${BASIS_VOR.map(field).join('')}</div>
+  <h3>${esc(a.sparte)}</h3><div class="grid">${SPARTEN[a.sparte].felder.map(field).join('')}</div>
+  <h3>Ergebnis</h3><div class="grid">${BASIS_NACH.map(field).join('')}</div>
+  ${B.hints.map(h=>`<div class="hint">${esc(h)}</div>`).join('')}</div>`;
 }
-function gSet(id,k,v){A(id).gutachten[k]=v;save();}
+function gSet(id,k,v,re){A(id).gutachten[k]=v;save();if(re)render();}
+function tBerechnung(a){
+  const B=berechnung(a), F=fristen(a);
+  let bu='';
+  if(a.sparte==='Betriebsunterbrechung'){
+    const m=buMonate(a);
+    bu=m.length?`<h3>Monatswerte Haftzeit</h3><table class="res"><tr><th>Monat</th><th>Soll-Umsatz (€)</th><th>Ist-Umsatz (€)</th><th>Ausfall</th></tr>
+      ${m.map(x=>`<tr><td>${fmt(x.von)} – ${fmt(x.bis)}</td>${['soll','ist'].map(k=>`<td><input type="number" value="${x[k]}" onchange="buSet('${a.id}',${x.i},'${k}',this.value)"></td>`).join('')}
+        <td class="${x.ist===''&&x.bis<TODAY()?'warn':''}">${x.soll!==''&&x.ist!==''?eur(Math.max(0,x.soll-x.ist)):x.bis<TODAY()?'fehlt':'—'}</td></tr>`).join('')}</table>
+      <div class="grid"><div><label>Ersparte variable Kosten (% vom Umsatz)</label><input type="number" value="${esc(a.bu.varQuote)}" onchange="A('${a.id}').bu.varQuote=this.value;save();render()"></div>
+      <div><label>Schadenminderungskosten (€)</label><input type="number" value="${esc(a.bu.smk)}" onchange="A('${a.id}').bu.smk=this.value;save();render()"></div></div>`
+      :'<p class="warn">In der Gutachten-Maske „Unterbrechung ab“ und „Haftzeit“ eintragen.</p>';
+  }
+  return `<div class="grid"><div class="card"><h2>Berechnung</h2>${bu}
+    ${B.rows.length?`<table class="res">${B.rows.map(([l,v],i)=>`<tr><td>${i===B.rows.length-1?'<b>'+esc(l)+'</b>':esc(l)}</td><td>${i===B.rows.length-1?'<b>'+esc(v)+'</b>':esc(v)}</td></tr>`).join('')}</table>`:''}
+    ${B.hints.map(h=>`<div class="hint">${esc(h)}</div>`).join('')}</div>
+  <div class="card"><h2>Fristen</h2>${F.length?`<table>${F.map(f=>{const d=daysBetween(TODAY(),f.d);return `<tr><td class="${d<0?'bad':d<=30?'warn':''}"><b>${fmt(f.d)}</b><br><span style="font-size:12px">${d<0?'abgelaufen':'in '+d+' Tagen'}</span></td><td>${esc(f.t)}<br><span class="muted" style="font-size:12px">${esc(f.b)}</span></td></tr>`}).join('')}</table>`
+    :'<p class="muted">Für diese Sparte bzw. mit den bisherigen Daten keine Fristen ableitbar.</p>'}
+    <p class="muted" style="font-size:12px">Arbeitshilfe, keine Rechtsberatung. Hemmung, Unterbrechung und abweichende Vereinbarungen werden nicht berücksichtigt.</p></div></div>`;
+}
+function buSet(id,i,k,v){A(id).bu.werte[i][k]=v===''?'':Number(v);save();render();}
 function tPruefung(a){
   return a.pruefungen.map((p,pi)=>{const s=summen(p);return `<div class="card"><div class="row" style="justify-content:space-between"><h2>${p.typ}: ${esc(p.firma)} <span class="muted">${fmt(p.datum)}</span></h2>
     <button class="btn primary" onclick="pdfPruefung(A('${a.id}'),A('${a.id}').pruefungen[${pi}])">Prüfbericht PDF</button></div>
@@ -461,8 +727,8 @@ function tPruefung(a){
     <td class="${x.ep>x.anerkannt_ep?'bad':''}">${eur(x.menge*(x.ep-x.anerkannt_ep))}</td></tr>`).join('')}
   <tr><td colspan="2"><button class="btn" onclick="pPos('${a.id}',${pi})">+ Position</button></td><td><b>${eur(s.gef)}</b></td><td><b>${eur(s.anr)}</b></td><td class="bad"><b>${eur(s.gef-s.anr)} (${s.gef?Math.round(100*(s.gef-s.anr)/s.gef):0} %)</b></td></tr></table>
   <label>Bemerkung</label><textarea onchange="A('${a.id}').pruefungen[${pi}].bemerkung=this.value;save()">${esc(p.bemerkung)}</textarea></div>`}).join('')+
-  `<div class="card"><h2>Neue Prüfung</h2><div class="grid"><div><label>Typ</label><select id="p_typ"><option>Angebot</option><option>Rechnung</option></select></div>
-    <div><label>Firma</label><input id="p_firma"></div><div><label>Datum Beleg</label><input id="p_dat" type="date" value="${TODAY()}"></div></div>
+  `<div class="card"><h2>Neue Prüfung</h2><div class="grid"><div><label>Typ</label><select id="p_typ"><option>Angebot</option><option>Rechnung</option><option>Werftrechnung</option><option>Forderung Anspruchsteller</option></select></div>
+    <div><label>Firma / Anspruchsteller</label><input id="p_firma"></div><div><label>Datum Beleg</label><input id="p_dat" type="date" value="${TODAY()}"></div></div>
     <p><button class="btn primary" onclick="pNeu('${a.id}')">Anlegen</button></p></div>`;
 }
 function pSet(id,pi,i,k,v){A(id).pruefungen[pi].positionen[i][k]=v;save();render();}
